@@ -23,6 +23,9 @@ add_subdirectory(codegen)
 
 # AyuGram filters
 add_subdirectory(lib_icu)
+if (APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(icu_regex_minimal PRIVATE -Wno-shorten-64-to-32)
+endif()
 # AyuGram filters
 
 get_filename_component(src_loc SourceFiles REALPATH)

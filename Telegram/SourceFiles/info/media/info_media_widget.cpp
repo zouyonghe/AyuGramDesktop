@@ -25,6 +25,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_menu_icons.h"
 
+#include <QAction>
+
 namespace Info::Media {
 
 std::optional<int> TypeToTabIndex(Type type) {
@@ -184,9 +186,9 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto batchSelection = addAction(
 		tr::lng_media_batch_selection(tr::now),
 		[=] {
-			_inner->setBatchSelectionEnabled(
-				!_inner->batchSelectionEnabled());
-		});
+				_inner->setBatchSelectionEnabled(
+					!_inner->batchSelectionEnabled());
+			}, &st::menuIconSelect);
 	batchSelection->setCheckable(true);
 	batchSelection->setChecked(_inner->batchSelectionEnabled());
 	addAction(tr::lng_calendar(tr::now), [=] {

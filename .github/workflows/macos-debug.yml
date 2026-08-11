@@ -11,6 +11,7 @@ jobs:
 
     env:
       PREPARE_PATH: Telegram/build/prepare/prepare.py
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
 
     steps:
       - name: Set repository name

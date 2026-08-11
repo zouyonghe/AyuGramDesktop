@@ -97,7 +97,6 @@ jobs:
             -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fpch-preprocess" \
             -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -D TDESKTOP_API_TEST=ON \
-            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
             -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
 
       - name: Save Telegram Desktop cache

@@ -27,7 +27,8 @@ jobs:
           echo "CCACHE_DIR=$RUNNER_TEMP/.tdesktop-cache" >> "$GITHUB_ENV"
           cd Telegram/build/docker/centos_env
           poetry install
-          poetry run gen_dockerfile > Dockerfile
+          DOCKERFILE=$(DEBUG= LTO= poetry run gen_dockerfile)
+          echo "$DOCKERFILE" > Dockerfile
           rm -rf __pycache__
 
       - name: Free disk space

@@ -188,6 +188,14 @@ void InnerWidget::selectionAction(SelectionAction action) {
 	_list->selectionAction(action);
 }
 
+void InnerWidget::setBatchSelectionEnabled(bool enabled) {
+	_list->setBatchSelectionEnabled(enabled);
+}
+
+bool InnerWidget::batchSelectionEnabled() const {
+	return _list->batchSelectionEnabled();
+}
+
 InnerWidget::~InnerWidget() = default;
 
 int InnerWidget::resizeGetHeight(int newWidth) {

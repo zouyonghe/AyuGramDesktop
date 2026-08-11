@@ -1,0 +1,126 @@
+name: Linux Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Rocky Linux 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      IMAGE_TAG: tdesktop:centos_env
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up build tools
+        run: |
+          sudo apt update
+          curl -sSL https://install.python-poetry.org | python3 -
+          curl -sSL https://github.com/ccache/ccache/releases/download/v4.13.6/ccache-4.13.6-linux-x86_64-glibc.tar.xz \
+          | sudo tar xJ -C /usr/local/bin --strip-components=1 ccache-4.13.6-linux-x86_64-glibc/ccache
+          echo "CCACHE_DIR=$RUNNER_TEMP/.tdesktop-cache" >> "$GITHUB_ENV"
+          cd Telegram/build/docker/centos_env
+          poetry install
+          poetry run gen_dockerfile > Dockerfile
+          rm -rf __pycache__
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
+      - name: Set up Docker Buildx
+        id: setup-buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Restore libraries cache
+        id: cache-libs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/.buildx-cache
+            ${{ runner.temp }}/.mount-cache
+          key: ${{ runner.os }}-libs-${{ hashFiles('Telegram/build/docker/centos_env/**') }}
+          restore-keys: ${{ runner.os }}-libs-
+
+      - name: Restore Docker cache mounts
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723
+        with:
+          builder: ${{ steps.setup-buildx.outputs.name }}
+          cache-dir: ${{ runner.temp }}/.mount-cache
+          dockerfile: Telegram/build/docker/centos_env/Dockerfile
+          skip-extraction: ${{ steps.cache-libs.outputs.cache-hit }}
+
+      - name: Build libraries image
+        uses: docker/build-push-action@v7
+        with:
+          context: Telegram/build/docker/centos_env
+          load: true
+          tags: ${{ env.IMAGE_TAG }}
+          cache-from: type=local,src=${{ runner.temp }}/.buildx-cache
+          cache-to: type=local,dest=${{ runner.temp }}/.buildx-cache-new,mode=max
+
+      - name: Move libraries cache
+        run: |
+          rm -rf "${{ runner.temp }}/.buildx-cache"
+          mv "${{ runner.temp }}/.buildx-cache-new" "${{ runner.temp }}/.buildx-cache"
+
+      - name: Restore Telegram Desktop cache
+        id: cache-tdesktop
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-tdesktop-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-tdesktop-
+
+      - name: Build Telegram Desktop
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache -z
+          docker run --rm \
+            -u "$(id -u)" \
+            -v "$PWD:/usr/src/tdesktop" \
+            -v "${{ env.CCACHE_DIR }}:/var/cache/ccache" \
+            -e CONFIG=Debug \
+            -e CCACHE_SLOPPINESS=pch_defines,time_macros \
+            "$IMAGE_TAG" \
+            env -u CCACHE_DISABLE /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D CMAKE_C_FLAGS_DEBUG="-O0 -fpch-preprocess" \
+            -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fpch-preprocess" \
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -D TDESKTOP_API_TEST=ON \
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+
+      - name: Save Telegram Desktop cache
+        if: github.ref_name == github.event.repository.default_branch
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.cache-tdesktop.outputs.cache-primary-key }}
+
+      - name: Check output
+        run: |
+          test -f out/Debug/AyuGram
+          test -f out/Debug/Updater
+          file out/Debug/AyuGram
+          stat -c '%n: %s bytes' out/Debug/AyuGram out/Debug/Updater
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p out/Debug/artifact
+          mv out/Debug/AyuGram out/Debug/Updater out/Debug/artifact/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: AyuGram-Linux-Debug
+          path: out/Debug/artifact/
+          retention-days: 7

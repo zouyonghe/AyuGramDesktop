@@ -58,18 +58,14 @@ using Photos = std::vector<std::pair<not_null<PhotoData*>, FullMsgId>>;
 	return false;
 }
 
-void AddAction(
-		not_null<Ui::PopupMenu*> menu,
+Fn<void()> PrepareDownloadAction(
 		not_null<Window::SessionController*> controller,
 		Documents &&documents,
 		Photos &&photos,
-		Fn<void()> callback) {
-	const auto text = documents.empty()
-		? tr::lng_context_save_images_selected(tr::now)
-		: tr::lng_context_save_documents_selected(tr::now);
-	const auto icon = documents.empty()
-		? &st::menuIconSaveImage
-		: &st::menuIconDownload;
+		Fn<void()> callback,
+		bool forceDefaultPath,
+		Fn<void(FullMsgId, QString)> destination,
+		Fn<void(FullMsgId)> saved) {
 	const auto shouldShowToast = documents.empty();
 
 	const auto weak = base::make_weak(controller);
@@ -95,6 +91,10 @@ void AddAction(
 		const auto showToast = !shouldShowToast
 			? Fn<void(const QString &)>(nullptr)
 			: [=](const QString &lastPath) {
+				const auto controller = weak.get();
+				if (!controller) {
+					return;
+				}
 				const auto filter = [lastPath](const auto ...) {
 					File::ShowInFolder(lastPath);
 					return false;
@@ -116,17 +116,24 @@ void AddAction(
 				});
 			};
 
-		auto views = std::vector<std::shared_ptr<Data::PhotoMedia>>();
-		auto dates = std::vector<TimeId>();
+		struct PhotoDownload {
+			std::shared_ptr<Data::PhotoMedia> view;
+			FullMsgId id;
+			TimeId date = 0;
+		};
+		auto downloads = std::vector<PhotoDownload>();
 		for (const auto &[photo, fullId] : photos) {
 			if (const auto view = photo->createMediaView()) {
 				view->wanted(Data::PhotoSize::Large, fullId);
-				views.push_back(view);
 				const auto photoDate = photo->date();
 				const auto item = session->data().message(fullId);
-				dates.push_back(photoDate
-					? photoDate
-					: (item ? item->date() : TimeId(0)));
+				downloads.push_back({
+					.view = view,
+					.id = fullId,
+					.date = photoDate
+						? photoDate
+						: (item ? item->date() : TimeId(0)),
+				});
 			}
 		}
 
@@ -147,12 +154,17 @@ void AddAction(
 					path);
 			};
 			auto lastPath = QString();
-			for (auto i = 0; i < views.size(); i++) {
+			for (auto i = 0; i < downloads.size(); i++) {
 				lastPath = fullPath(i + 1);
-				if (views[i]->saveToFile(lastPath) && dates[i] > 0) {
+				const auto &download = downloads[i];
+				if (destination) {
+					destination(download.id, lastPath);
+				}
+				const auto savedToFile = download.view->saveToFile(lastPath);
+				if (savedToFile && download.date > 0) {
 					auto f = QFile(lastPath);
 					if (f.open(QIODevice::ReadWrite)) {
-						const auto when = base::unixtime::parse(dates[i]);
+						const auto when = base::unixtime::parse(download.date);
 						f.setFileTime(
 							when,
 							QFileDevice::FileModificationTime);
@@ -160,6 +172,9 @@ void AddAction(
 							when,
 							QFileDevice::FileAccessTime);
 					}
+				}
+				if (savedToFile && saved) {
+					saved(download.id);
 				}
 			}
 			if (showToast) {
@@ -183,26 +198,39 @@ void AddAction(
 	const auto saveDocuments = [=](const QString &folderPath) {
 		for (const auto &[document, origin] : documents) {
 			if (!folderPath.isEmpty()) {
-				const auto name =
-					base::FileNameFromUserString(document->filename());
-				document->save(origin, folderPath + name);
+				const auto path = filedialogNextFilename(
+					document->filename(),
+					document->filepath(true),
+					folderPath);
+				if (path.isEmpty()) {
+					continue;
+				}
+				if (destination) {
+					destination(origin, path);
+				}
+				document->save(origin, path);
+				if (QFileInfo::exists(path) && saved) {
+					saved(origin);
+				}
 			} else {
 				DocumentSaveClickHandler::SaveAndTrack(origin, document);
 			}
 		}
 	};
 
-	menu->addAction(text, [=] {
+	return [=] {
 		const auto save = [=](const QString &folderPath) {
 			saveImages(folderPath);
 			saveDocuments(folderPath);
-			callback();
+			if (callback) {
+				callback();
+			}
 		};
 		const auto controller = weak.get();
 		if (!controller) {
 			return;
 		}
-		if (Core::App().settings().askDownloadPath()) {
+		if (!forceDefaultPath && Core::App().settings().askDownloadPath()) {
 			const auto initialPath = [] {
 				const auto path = Core::App().settings().downloadPath();
 				if (!path.isEmpty() && path != FileDialog::Tmp()) {
@@ -224,13 +252,77 @@ void AddAction(
 				tr::lng_download_path_choose(tr::now),
 				initialPath,
 				handleFolder);
+		} else if (forceDefaultPath) {
+			const auto session = &controller->session();
+			const auto configured = Core::App().settings().downloadPath();
+			const auto path = configured.isEmpty()
+				? File::DefaultDownloadPath(session)
+				: (configured == FileDialog::Tmp())
+				? session->local().tempDirectory()
+				: configured;
+			if (!path.isEmpty()) {
+				save(path.endsWith('/') ? path : (path + '/'));
+			}
 		} else {
 			save(QString());
 		}
-	}, icon);
+	};
+}
+
+void AddAction(
+		not_null<Ui::PopupMenu*> menu,
+		not_null<Window::SessionController*> controller,
+		Documents &&documents,
+		Photos &&photos,
+		Fn<void()> callback) {
+	const auto text = documents.empty()
+		? tr::lng_context_save_images_selected(tr::now)
+		: tr::lng_context_save_documents_selected(tr::now);
+	const auto icon = documents.empty()
+		? &st::menuIconSaveImage
+		: &st::menuIconDownload;
+	menu->addAction(
+		text,
+		PrepareDownloadAction(
+			controller,
+			std::move(documents),
+			std::move(photos),
+			std::move(callback),
+			false,
+			nullptr,
+			nullptr),
+		icon);
 }
 
 } // namespace
+
+bool DownloadSelectedFiles(
+		not_null<Window::SessionController*> window,
+		const std::vector<not_null<HistoryItem*>> &items,
+		Fn<void()> callback,
+		bool forceDefaultPath,
+		Fn<void(FullMsgId, QString)> destination,
+		Fn<void(FullMsgId)> saved) {
+	auto documents = Documents();
+	auto photos = Photos();
+	for (const auto item : items) {
+		if (!Added(item, documents, photos)) {
+			return false;
+		}
+	}
+	if (items.empty()) {
+		return false;
+	}
+	PrepareDownloadAction(
+		window,
+		std::move(documents),
+		std::move(photos),
+		std::move(callback),
+		forceDefaultPath,
+		std::move(destination),
+		std::move(saved))();
+	return true;
+}
 
 void AddDownloadFilesAction(
 		not_null<Ui::PopupMenu*> menu,

@@ -72,6 +72,10 @@ public:
 	rpl::producer<int> scrollToRequests() const;
 	rpl::producer<SelectedItems> selectedListValue() const;
 	void selectionAction(SelectionAction action);
+	void setBatchSelectionEnabled(bool enabled);
+	[[nodiscard]] bool batchSelectionEnabled() const {
+		return _batchSelectionEnabled;
+	}
 
 	struct ReorderDescriptor {
 		Fn<void(int old, int pos, Fn<void()> done, Fn<void()> fail)> save;
@@ -124,6 +128,11 @@ private:
 	friend class ListZoom;
 
 	struct DateBadge;
+	enum class BatchDownloadState {
+		Waiting,
+		Downloading,
+		Downloaded,
+	};
 	using Section = ListSection;
 	using FoundItem = ListFoundItem;
 	using CursorState = HistoryView::CursorState;
@@ -234,6 +243,9 @@ private:
 	[[nodiscard]] bool hasSelectedItems() const;
 	void clearSelected();
 	void forwardSelected();
+	void downloadSelected();
+	void refreshDownloadStates();
+	void paintDownloadStates(Painter &p, QRect clip);
 	void forwardItem(GlobalMsgId globalId);
 	void forwardItems(MessageIdsList &&items);
 	void deleteSelected();
@@ -366,8 +378,13 @@ private:
 	CursorState _mouseCursorState = CursorState();
 	uint16 _mouseTextSymbol = 0;
 	bool _pressWasInactive = false;
+	bool _batchSelectionEnabled = false;
 	SelectedMap _selected;
 	SelectedMap _dragSelected;
+	base::flat_map<not_null<const HistoryItem*>, BatchDownloadState>
+		_batchDownloadStates;
+	base::flat_map<not_null<const HistoryItem*>, QString> _batchDownloadPaths;
+	base::Timer _batchDownloadTimer;
 	rpl::event_stream<SelectedItems> _selectedListStream;
 	style::cursor _cursor = style::cur_default;
 	DragSelectAction _dragSelectAction = DragSelectAction::None;

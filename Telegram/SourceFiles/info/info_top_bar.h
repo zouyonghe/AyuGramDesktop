@@ -128,6 +128,7 @@ private:
 	[[nodiscard]] Ui::StringWithNumbers generateSelectedText() const;
 	[[nodiscard]] bool computeCanDelete() const;
 	[[nodiscard]] bool computeCanForward() const;
+	[[nodiscard]] bool computeCanDownload() const;
 	[[nodiscard]] bool computeCanUnpinStories() const;
 	[[nodiscard]] bool computeCanToggleStoryPin() const;
 	[[nodiscard]] bool computeAllStoriesInProfile() const;
@@ -176,12 +177,14 @@ private:
 	SelectedItems _selectedItems;
 	bool _canDelete = false;
 	bool _canForward = false;
+	bool _canDownload = false;
 	bool _canToggleStoryPin = false;
 	bool _canUnpinStories = false;
 	bool _allStoriesInProfile = false;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _cancelSelection;
 	QPointer<Ui::FadeWrap<Ui::LabelWithNumbers>> _selectionText;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _forward;
+	QPointer<Ui::FadeWrap<Ui::IconButton>> _download;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _delete;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _toggleStoryInProfile;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _toggleStoryPin;

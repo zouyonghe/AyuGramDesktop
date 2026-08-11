@@ -2225,6 +2225,14 @@ void OverlayWidget::fillContextMenuActions(
 			(saveControlLocked()
 				? &st::mediaMenuIconDownloadLocked
 				: &st::mediaMenuIconDownload));
+		if (_photo || (_document && _document->isVideoFile())) {
+			addAction(
+				(_document || _photo->hasVideo())
+					? tr::lng_save_video(tr::now)
+					: tr::lng_save_photo(tr::now),
+				[=] { downloadMedia(true); },
+				&st::mediaMenuIconDownload);
+		}
 	}
 
 	if (const auto overviewType = computeOverviewType()) {
@@ -3287,10 +3295,10 @@ void OverlayWidget::shareAtTime() {
 	show->show(Stories::PrepareShareAtTimeBox(show, _message, timestamp));
 }
 
-void OverlayWidget::downloadMedia() {
+void OverlayWidget::downloadMedia(bool skipPathPrompt) {
 	if (!_photo && !_document) {
 		return;
-	} else if (Core::App().settings().askDownloadPath()) {
+	} else if (!skipPathPrompt && Core::App().settings().askDownloadPath()) {
 		return saveAs();
 	} else if (hasCopyMediaRestriction()) {
 		if (_stories && !hasCopyMediaRestriction(true)) {

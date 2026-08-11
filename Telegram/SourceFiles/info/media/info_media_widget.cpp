@@ -181,6 +181,14 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			_inner->zoomOut();
 		}, &st::menuIconZoomOut);
 	}
+	const auto batchSelection = addAction(
+		tr::lng_media_batch_selection(tr::now),
+		[=] {
+			_inner->setBatchSelectionEnabled(
+				!_inner->batchSelectionEnabled());
+		});
+	batchSelection->setCheckable(true);
+	batchSelection->setChecked(_inner->batchSelectionEnabled());
 	addAction(tr::lng_calendar(tr::now), [=] {
 		controller()->parentController()->showCalendar({
 			.chat = Dialogs::Key(

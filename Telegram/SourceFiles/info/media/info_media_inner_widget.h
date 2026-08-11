@@ -48,6 +48,8 @@ public:
 	rpl::producer<Ui::ScrollToRequest> scrollToRequests() const;
 	rpl::producer<SelectedItems> selectedListValue() const;
 	void selectionAction(SelectionAction action);
+	void setBatchSelectionEnabled(bool enabled);
+	[[nodiscard]] bool batchSelectionEnabled() const;
 
 	void jumpToMessage(MsgId msgId);
 

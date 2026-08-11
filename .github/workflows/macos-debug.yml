@@ -1,0 +1,78 @@
+name: macOS Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS arm64
+    runs-on: macos-latest
+    timeout-minutes: 360
+
+    env:
+      PREPARE_PATH: Telegram/build/prepare/prepare.py
+
+    steps:
+      - name: Set repository name
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_ENV"
+
+      - name: Clone
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          path: ${{ env.REPO_NAME }}
+
+      - name: Set up build tools
+        run: |
+          sudo chown -R "$(whoami)":admin /usr/local/share
+          brew update
+          brew upgrade || true
+          brew install automake libtool meson nasm ninja pkg-config
+          sudo mdutil -a -i off
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          sudo sed -i '' '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/ -g//' /opt/homebrew/share/cmake/Modules/Compiler/GNU.cmake
+
+      - name: Restore libraries cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            Libraries
+            ThirdParty
+          key: ${{ runner.os }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
+          restore-keys: ${{ runner.os }}-libs-
+
+      - name: Prepare libraries
+        run: ./$REPO_NAME/Telegram/build/prepare/mac.sh skip-release silent
+
+      - name: Free disk space
+        run: find Libraries '(' '(' ! '(' -name '*.a' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -perm +111 ')' -type f ')' -o -empty ')' -delete
+
+      - name: Build AyuGram Desktop
+        run: |
+          cd "$REPO_NAME/Telegram"
+          ./configure.sh \
+            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+            -D TDESKTOP_API_TEST=ON \
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON \
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+          cmake --build ../out --config Debug --parallel
+
+      - name: Check output
+        run: |
+          test -d "$REPO_NAME/out/Debug/AyuGram.app"
+          test -f "$REPO_NAME/out/Debug/Updater"
+          du -sh "$REPO_NAME/out/Debug/AyuGram.app" "$REPO_NAME/out/Debug/Updater"
+
+      - name: Prepare artifact
+        run: |
+          cd "$REPO_NAME/out/Debug"
+          tar -czf AyuGram-macOS-arm64-Debug.tar.gz AyuGram.app Updater
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: AyuGram-macOS-arm64-Debug
+          path: ${{ env.REPO_NAME }}/out/Debug/AyuGram-macOS-arm64-Debug.tar.gz
+          retention-days: 7

@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/stories/media_stories_controller.h" // ...TogglePinnedToast.
 #include "media/stories/media_stories_share.h" // PrepareShareBox.
 #include "media/stories/media_stories_stealth.h"
+#include "menu/menu_item_download_files.h"
 #include "window/window_session_controller.h"
 #include "window/window_peer_menu.h"
 #include "lang/lang_numbers_animation.h"
@@ -89,6 +90,7 @@ namespace Media {
 namespace {
 
 constexpr auto kMediaCountForSearch = 10;
+constexpr auto kBatchDownloadStatusRefresh = crl::time(200);
 
 } // namespace
 
@@ -165,10 +167,11 @@ ListWidget::ListWidget(
 , _controller(controller)
 , _provider(MakeProvider(_controller))
 , _rowsScrollCache([=] { update(); })
+, _batchDownloadTimer([=] { refreshDownloadStates(); })
 , _dateBadge(std::make_unique<DateBadge>(
-	_provider->type(),
-	[=] { scrollDateCheck(); },
-	[=] { scrollDateHide(); }))
+		_provider->type(),
+		[=] { scrollDateCheck(); },
+		[=] { scrollDateHide(); }))
 , _selectedLimit(MaxSelectedItems)
 , _storiesAddToAlbumId(controller->storiesAddToAlbumId())
 , _hiddenMark(std::make_unique<StickerPremiumMark>(
@@ -258,6 +261,7 @@ void ListWidget::subscribeToSession(
 	session->downloaderTaskFinished(
 	) | rpl::on_next([=] {
 		_rowsScrollCache.clear();
+		refreshDownloadStates();
 		update();
 	}, lifetime);
 
@@ -273,6 +277,9 @@ void ListWidget::subscribeToSession(
 
 	session->data().itemRepaintRequest(
 	) | rpl::on_next([this](auto item) {
+		if (_batchDownloadStates.contains(item)) {
+			refreshDownloadStates();
+		}
 		repaintItem(item);
 	}, lifetime);
 
@@ -372,6 +379,7 @@ void ListWidget::selectionAction(SelectionAction action) {
 	switch (action) {
 	case SelectionAction::Clear: clearSelected(); return;
 	case SelectionAction::Forward: forwardSelected(); return;
+	case SelectionAction::Download: downloadSelected(); return;
 	case SelectionAction::Delete: deleteSelected(); return;
 	case SelectionAction::ToggleStoryToProfile:
 		toggleStoryInProfileSelected(true);
@@ -380,6 +388,16 @@ void ListWidget::selectionAction(SelectionAction action) {
 		toggleStoryInProfileSelected(false);
 		return;
 	case SelectionAction::ToggleStoryPin: toggleStoryPinSelected(); return;
+	}
+}
+
+void ListWidget::setBatchSelectionEnabled(bool enabled) {
+	if (_batchSelectionEnabled == enabled) {
+		return;
+	}
+	_batchSelectionEnabled = enabled;
+	if (!enabled) {
+		clearSelected();
 	}
 }
 
@@ -457,6 +475,8 @@ void ListWidget::itemRemoved(not_null<const HistoryItem*> item) {
 	if (const auto i = _selected.find(item); i != _selected.cend()) {
 		removeItemSelection(i);
 	}
+	_batchDownloadStates.remove(item);
+	_batchDownloadPaths.remove(item);
 
 	if (needHeightRefresh) {
 		refreshHeight();
@@ -471,6 +491,13 @@ auto ListWidget::collectSelectedItems() const -> SelectedItems {
 		auto result = SelectedItem(item->globalId());
 		result.canDelete = selection.canDelete;
 		result.canForward = selection.canForward;
+		const auto media = item->media();
+		result.canDownload = !item->forbidsForward()
+			&& media
+			&& (media->photo() || media->document())
+			&& ((_provider->type() == Type::Photo)
+				|| (_provider->type() == Type::Video)
+				|| (_provider->type() == Type::PhotoVideo));
 		result.canToggleStoryPin = selection.canToggleStoryPin;
 		result.canUnpinStory = selection.canUnpinStory;
 		result.storyInProfile = selection.storyInProfile;
@@ -1086,6 +1113,7 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 	if (fromSectionIt != _sections.end()) {
 		fromSectionIt->paintFloatingHeader(p, _visibleTop, outerWidth);
 	}
+	paintDownloadStates(p, clip);
 
 	if (_mouseAction == MouseAction::Reordering && _reorderState.item) {
 		const auto o = ScopedPainterOpacity(p, 0.8);
@@ -1486,6 +1514,17 @@ void ListWidget::showContextMenu(
 }
 
 void ListWidget::contextMenuEvent(QContextMenuEvent *e) {
+	if (_batchSelectionEnabled
+		&& e->reason() == QContextMenuEvent::Mouse) {
+		mouseActionUpdate(e->globalPos());
+		if (_overState.item
+			&& _overState.inside
+			&& !_provider->hasSelectRestriction()) {
+			toggleItemSelection(_overState.item);
+		}
+		e->accept();
+		return;
+	}
 	showContextMenu(
 		e,
 		(e->reason() == QContextMenuEvent::Mouse)
@@ -1496,6 +1535,138 @@ void ListWidget::contextMenuEvent(QContextMenuEvent *e) {
 void ListWidget::forwardSelected() {
 	if (auto items = collectSelectedIds(); !items.empty()) {
 		forwardItems(std::move(items));
+	}
+}
+
+void ListWidget::downloadSelected() {
+	auto items = std::vector<not_null<HistoryItem*>>();
+	items.reserve(_selected.size());
+	for (const auto &[item, selection] : _selected) {
+		if (selection.text != FullSelection) {
+			continue;
+		}
+		auto mutableItem = const_cast<HistoryItem*>(item.get());
+		items.emplace_back(mutableItem);
+		_batchDownloadStates[item] = BatchDownloadState::Waiting;
+	}
+	if (items.empty()) {
+		return;
+	}
+	if (!Menu::DownloadSelectedFiles(
+		_controller->parentController(),
+		items,
+		nullptr,
+		true,
+		[weak = base::make_weak(this)](FullMsgId id, QString path) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (const auto item = strong->session().data().message(id)) {
+				strong->_batchDownloadPaths[item] = std::move(path);
+			}
+		},
+		[weak = base::make_weak(this)](FullMsgId id) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (const auto item = strong->session().data().message(id)) {
+				const auto i = strong->_batchDownloadStates.find(item);
+				if (i != strong->_batchDownloadStates.end()) {
+					i->second = BatchDownloadState::Downloaded;
+					strong->repaintItem(item);
+				}
+			}
+		})) {
+		for (const auto item : items) {
+			_batchDownloadStates.remove(item);
+			_batchDownloadPaths.remove(item);
+		}
+		return;
+	}
+	update();
+	_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
+}
+
+void ListWidget::refreshDownloadStates() {
+	auto downloading = false;
+	for (auto &[item, state] : _batchDownloadStates) {
+		if (state == BatchDownloadState::Downloaded) {
+			continue;
+		}
+		const auto media = item->media();
+		const auto photo = media ? media->photo() : nullptr;
+		const auto document = media ? media->document() : nullptr;
+		const auto pathIt = _batchDownloadPaths.find(item);
+		const auto path = (pathIt != _batchDownloadPaths.end())
+			? pathIt->second
+			: QString();
+		const auto next = document
+			? (document->loading()
+				? BatchDownloadState::Downloading
+				: (!path.isEmpty() && QFileInfo::exists(path))
+				? BatchDownloadState::Downloaded
+				: BatchDownloadState::Waiting)
+			: photo
+			? (photo->loading()
+				? BatchDownloadState::Downloading
+				: BatchDownloadState::Waiting)
+			: BatchDownloadState::Waiting;
+		if (state != next) {
+			state = next;
+			repaintItem(item);
+		}
+		downloading = downloading
+			|| (state == BatchDownloadState::Downloading);
+	}
+	if (downloading) {
+		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
+	}
+}
+
+void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
+	for (const auto &[item, state] : _batchDownloadStates) {
+		const auto found = findItemByItem(item);
+		if (!found || !found->geometry.intersects(clip)) {
+			continue;
+		}
+		const auto text = (state == BatchDownloadState::Waiting)
+			? tr::lng_media_download_waiting(tr::now)
+			: (state == BatchDownloadState::Downloading)
+			? tr::lng_media_download_downloading(tr::now)
+			: tr::lng_media_download_downloaded(tr::now);
+		const auto textWidth = st::infoMediaDownloadStatusFont->width(text);
+		const auto badge = QRect(
+			found->geometry.right()
+				- st::infoMediaDownloadStatusMargin
+				- textWidth
+				- st::infoMediaDownloadStatusPadding.left()
+				- st::infoMediaDownloadStatusPadding.right(),
+			found->geometry.bottom()
+				- st::infoMediaDownloadStatusMargin
+				- st::infoMediaDownloadStatusFont->height
+				- st::infoMediaDownloadStatusPadding.top()
+				- st::infoMediaDownloadStatusPadding.bottom(),
+			textWidth
+				+ st::infoMediaDownloadStatusPadding.left()
+				+ st::infoMediaDownloadStatusPadding.right(),
+			st::infoMediaDownloadStatusFont->height
+				+ st::infoMediaDownloadStatusPadding.top()
+				+ st::infoMediaDownloadStatusPadding.bottom());
+		p.setPen(Qt::NoPen);
+		p.setBrush(st::infoMediaDownloadStatusBg);
+		p.drawRoundedRect(
+			badge,
+			st::infoMediaDownloadStatusRadius,
+			st::infoMediaDownloadStatusRadius);
+		p.setFont(st::infoMediaDownloadStatusFont);
+		p.setPen(st::infoMediaDownloadStatusFg);
+		p.drawText(
+			badge.x() + st::infoMediaDownloadStatusPadding.left(),
+			badge.y() + st::infoMediaDownloadStatusPadding.top()
+				+ st::infoMediaDownloadStatusFont->ascent,
+			text);
 	}
 }
 
@@ -2115,12 +2286,13 @@ void ListWidget::mouseActionStart(
 		}
 	}
 
-	if (ClickHandler::getPressed() && !hasSelected()) {
+	if (ClickHandler::getPressed()
+		&& (!hasSelected() || _batchSelectionEnabled)) {
 		_mouseAction = MouseAction::PrepareDrag;
 		if (canReorder()) {
 			startReorder(globalPosition);
 		}
-	} else if (hasSelectedItems()) {
+	} else if (hasSelectedItems() && !_batchSelectionEnabled) {
 		if (isItemUnderPressSelected() && ClickHandler::getPressed()) {
 			// In shared media overview drag only by click handlers.
 			_mouseAction = MouseAction::PrepareDrag; // start items drag
@@ -2272,7 +2444,8 @@ void ListWidget::mouseActionFinish(
 	const auto pressState = base::take(_pressState);
 	repaintItem(pressState.item);
 
-	const auto selectionMode = hasSelectedItems() || _storiesAddToAlbumId;
+	const auto selectionMode = (hasSelectedItems() && !_batchSelectionEnabled)
+		|| _storiesAddToAlbumId;
 	const auto simpleSelectionChange = pressState.item
 		&& pressState.inside
 		&& !_pressWasInactive

@@ -44,6 +44,7 @@ InfoTopBar {
 	mediaCancel: IconButton;
 	mediaActionsSkip: pixels;
 	mediaForward: IconButton;
+	mediaDownload: IconButton;
 	mediaDelete: IconButton;
 	storiesSave: IconButton;
 	storiesArchive: IconButton;
@@ -80,6 +81,12 @@ ProfileTabsStrip {
 }
 
 infoMediaHeaderFg: windowFg;
+infoMediaDownloadStatusFont: font(11px semibold);
+infoMediaDownloadStatusFg: menuFg;
+infoMediaDownloadStatusBg: menuBg;
+infoMediaDownloadStatusPadding: margins(6px, 3px, 6px, 3px);
+infoMediaDownloadStatusMargin: 6px;
+infoMediaDownloadStatusRadius: 4px;
 
 infoMediaSearch: SearchFieldRow {
 	height: 44px;
@@ -209,6 +216,10 @@ infoTopBarDelete: IconButton(infoTopBarForward) {
 	icon: icon {{ "info/info_media_delete", boxTitleCloseFg }};
 	iconOver: icon {{ "info/info_media_delete", boxTitleCloseFgOver }};
 }
+infoTopBarDownload: IconButton(infoTopBarForward) {
+	icon: icon {{ "menu/download", boxTitleCloseFg }};
+	iconOver: icon {{ "menu/download", boxTitleCloseFgOver }};
+}
 infoTopBarSaveStories: IconButton(infoTopBarForward) {
 	icon: icon {{ "info/info_stories_to_profile", boxTitleCloseFg }};
 	iconOver: icon {{ "info/info_stories_to_profile", boxTitleCloseFgOver }};
@@ -242,6 +253,7 @@ infoTopBar: InfoTopBar {
 	mediaCancel: infoTopBarMediaCancel;
 	mediaActionsSkip: 4px;
 	mediaForward: infoTopBarForward;
+	mediaDownload: infoTopBarDownload;
 	mediaDelete: infoTopBarDelete;
 	storiesSave: infoTopBarSaveStories;
 	storiesArchive: infoTopBarArchiveStories;

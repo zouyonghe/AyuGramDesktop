@@ -302,7 +302,7 @@ private:
 
 	void toMessage();
 	void saveAs();
-	void downloadMedia();
+	void downloadMedia(bool skipPathPrompt = false);
 	void saveCancel();
 	void showInFolder();
 	void forwardMedia();

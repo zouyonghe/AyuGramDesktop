@@ -63,6 +63,7 @@ struct SelectedItem {
 	GlobalMsgId globalId;
 	bool canDelete = false;
 	bool canForward = false;
+	bool canDownload = false;
 	bool canToggleStoryPin = false;
 	bool canUnpinStory = false;
 	bool storyInProfile = false;
@@ -79,6 +80,7 @@ struct SelectedItems {
 enum class SelectionAction {
 	Clear,
 	Forward,
+	Download,
 	Delete,
 	ToggleStoryPin,
 	ToggleStoryToProfile,

@@ -25,6 +25,14 @@ class SessionController;
 
 namespace Menu {
 
+[[nodiscard]] bool DownloadSelectedFiles(
+	not_null<Window::SessionController*> window,
+	const std::vector<not_null<HistoryItem*>> &items,
+	Fn<void()> callback = nullptr,
+	bool forceDefaultPath = false,
+	Fn<void(FullMsgId, QString)> destination = nullptr,
+	Fn<void(FullMsgId)> saved = nullptr);
+
 void AddDownloadFilesAction(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<Window::SessionController*> window,

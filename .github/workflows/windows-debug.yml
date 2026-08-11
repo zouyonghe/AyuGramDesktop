@@ -110,15 +110,12 @@ jobs:
       - name: Check output
         run: |
           if not exist %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe exit /b 1
-          if not exist %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe exit /b 1
           dir %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe
-          dir %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe
 
       - name: Prepare artifact
         run: |
           mkdir artifact
           move %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe artifact\
-          move %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe artifact\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

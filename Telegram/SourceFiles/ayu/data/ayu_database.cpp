@@ -7,7 +7,16 @@
 #include "ayu/data/ayu_database.h"
 
 #include "ayu/data/entities.h"
+#if defined __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc++26-extensions"
+#pragma clang diagnostic ignored "-Wdeprecated-literal-operator"
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
+#endif
 #include "ayu/libs/sqlite/sqlite_orm.h"
+#if defined __clang__
+#pragma clang diagnostic pop
+#endif
 #include "base/unixtime.h"
 
 using namespace sqlite_orm;

@@ -104,7 +104,7 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
-          cmake --build ..\out --config Debug --parallel
+          cmake --build ..\out --config Debug --parallel 2
 
       - name: Check output
         run: |

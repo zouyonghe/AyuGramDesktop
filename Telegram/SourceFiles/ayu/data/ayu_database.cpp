@@ -11,6 +11,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wc++26-extensions"
 #pragma clang diagnostic ignored "-Wdeprecated-literal-operator"
+#pragma clang diagnostic ignored "-Wunused-local-typedef"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 #endif
 #include "ayu/libs/sqlite/sqlite_orm.h"

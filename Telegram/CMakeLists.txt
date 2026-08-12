@@ -26,7 +26,9 @@ add_subdirectory(codegen)
 
 # AyuGram filters
 add_subdirectory(lib_icu)
-target_compile_options(icu_regex_minimal PRIVATE -Wno-deprecated-declarations)
+if (NOT MSVC)
+    target_compile_options(icu_regex_minimal PRIVATE -Wno-deprecated-declarations)
+endif()
 if (APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(icu_regex_minimal PRIVATE -Wno-shorten-64-to-32)
 endif()

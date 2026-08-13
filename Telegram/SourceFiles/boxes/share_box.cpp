@@ -1867,7 +1867,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 
 		if (AyuForward::isFullAyuForwardNeeded(items.front())) {
 			crl::async([=]{
-				for (const auto thread : result) {
+				for (const auto &thread : result) {
 					AyuForward::forwardMessages(
 					&history->owner().session(),
 					Api::SendAction(thread, options),
@@ -1881,7 +1881,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		} else if (AyuForward::isAyuForwardNeeded(items)) {
 			crl::async([=]
 			{
-				for (const auto thread : result) {
+				for (const auto &thread : result) {
 					AyuForward::intelligentForward(
 						&history->owner().session(),
 						Api::SendAction(thread, options),

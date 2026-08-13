@@ -305,7 +305,7 @@ bool DownloadSelectedFiles(
 		Fn<void(FullMsgId)> saved) {
 	auto documents = Documents();
 	auto photos = Photos();
-	for (const auto item : items) {
+	for (const auto &item : items) {
 		if (!Added(item, documents, photos)) {
 			return false;
 		}

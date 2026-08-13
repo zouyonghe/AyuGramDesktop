@@ -1579,7 +1579,7 @@ void ListWidget::downloadSelected() {
 				}
 			}
 		})) {
-		for (const auto item : items) {
+		for (const auto &item : items) {
 			_batchDownloadStates.remove(item);
 			_batchDownloadPaths.remove(item);
 		}

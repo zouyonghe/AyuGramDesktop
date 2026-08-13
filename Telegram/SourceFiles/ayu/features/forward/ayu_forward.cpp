@@ -348,7 +348,7 @@ void forwardMessages(
 
 	std::vector<not_null<HistoryItem*>> toBeDownloaded;
 
-	for (const auto item : items) {
+	for (const auto &item : items) {
 		if (mediaDownloadable(item->media())) {
 			toBeDownloaded.push_back(item);
 		}

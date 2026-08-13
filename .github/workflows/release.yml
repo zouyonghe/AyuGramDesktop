@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example v1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_VERSION"
+          else
+            tag="$REF_NAME"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must match vMAJOR.MINOR.PATCH: $tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          existing=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+            --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            if [ "$existing" != "$SHA" ]; then
+              echo "Tag $TAG points to $existing instead of $SHA" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" \
+            -f sha="$SHA"
+
+  linux:
+    name: Linux x64
+    needs: prepare
+    uses: ./.github/workflows/linux-debug.yml
+    secrets: inherit
+
+  windows:
+    name: Windows x64
+    needs: prepare
+    uses: ./.github/workflows/windows-debug.yml
+    secrets: inherit
+
+  macos:
+    name: macOS arm64
+    needs: prepare
+    uses: ./.github/workflows/macos-debug.yml
+    secrets: inherit
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - prepare
+      - linux
+      - windows
+      - macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          mkdir release-assets
+          tar -czf "release-assets/AyuGram-$TAG-linux-x64.tar.gz" \
+            -C artifacts/AyuGram-Linux-Debug .
+          (cd artifacts/AyuGram-Windows-x64-Debug && \
+            zip -r "$GITHUB_WORKSPACE/release-assets/AyuGram-$TAG-windows-x64.zip" .)
+          cp \
+            artifacts/AyuGram-macOS-arm64-Debug/AyuGram-macOS-arm64-Debug.tar.gz \
+            "release-assets/AyuGram-$TAG-macos-arm64.tar.gz"
+          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AyuGram $TAG" \
+              --generate-notes \
+              --verify-tag
+          fi

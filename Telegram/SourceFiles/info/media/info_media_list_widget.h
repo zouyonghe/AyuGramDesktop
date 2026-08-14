@@ -244,6 +244,7 @@ private:
 	void clearSelected();
 	void forwardSelected();
 	void downloadSelected();
+	void restoreDownloadStates();
 	void refreshDownloadStates();
 	void paintDownloadStates(Painter &p, QRect clip);
 	void forwardItem(GlobalMsgId globalId);

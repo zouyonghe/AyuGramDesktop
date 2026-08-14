@@ -749,6 +749,7 @@ void ListWidget::refreshRows() {
 	_reorderState = {};
 	_sections.clear();
 	_sections = _provider->fillSections(this);
+	restoreDownloadStates();
 
 	if (_controller->isDownloads() && !_sections.empty()) {
 		for (const auto &item : _sections.back().items()) {
@@ -768,6 +769,44 @@ void ListWidget::refreshRows() {
 	restoreScrollState();
 	mouseActionUpdate();
 	update();
+}
+
+void ListWidget::restoreDownloadStates() {
+	auto files = base::flat_map<Main::Session*, Menu::BatchDownloadFiles>();
+	for (const auto &section : _sections) {
+		for (const auto &entry : section.items()) {
+			const auto item = entry->getItem();
+			const auto owner = &item->history()->session();
+			const auto filesIt = files.find(owner);
+			const auto &sessionFiles = (filesIt != files.end())
+				? filesIt->second
+				: files.emplace(
+					owner,
+					Menu::BatchDownloadFilesFor(owner)).first->second;
+			const auto file = sessionFiles.find(item->fullId());
+			if (file == sessionFiles.end()) {
+				continue;
+			}
+			const auto media = item->media();
+			const auto photo = media ? media->photo() : nullptr;
+			const auto document = media ? media->document() : nullptr;
+			const auto loading = document
+				? document->loading()
+				: photo
+				? photo->loading()
+				: false;
+			if (!_batchDownloadStates.contains(item)) {
+				if (file->second.completed
+					&& QFileInfo::exists(file->second.path)) {
+					_batchDownloadStates[item] = BatchDownloadState::Downloaded;
+				} else if (!file->second.completed && loading) {
+					_batchDownloadStates[item] = BatchDownloadState::Downloading;
+				} else {
+					Menu::ForgetBatchDownloadFile(owner, item->fullId());
+				}
+			}
+		}
+	}
 }
 
 bool ListWidget::preventAutoHide() const {
@@ -1557,24 +1596,30 @@ void ListWidget::downloadSelected() {
 		items,
 		nullptr,
 		true,
-		[weak = base::make_weak(this)](FullMsgId id, QString path) {
+		[weak = base::make_weak(this)](
+				not_null<Main::Session*> session,
+				FullMsgId id,
+				QString path) {
 			const auto strong = weak.get();
 			if (!strong) {
 				return;
 			}
-			if (const auto item = strong->session().data().message(id)) {
+			if (const auto item = session->data().message(id)) {
 				strong->_batchDownloadPaths[item] = std::move(path);
 			}
 		},
-		[weak = base::make_weak(this)](FullMsgId id) {
+		[weak = base::make_weak(this)](
+				not_null<Main::Session*> session,
+				FullMsgId id) {
 			const auto strong = weak.get();
 			if (!strong) {
 				return;
 			}
-			if (const auto item = strong->session().data().message(id)) {
+			if (const auto item = session->data().message(id)) {
 				const auto i = strong->_batchDownloadStates.find(item);
 				if (i != strong->_batchDownloadStates.end()) {
 					i->second = BatchDownloadState::Downloaded;
+					strong->_batchDownloadPaths.remove(item);
 					strong->repaintItem(item);
 				}
 			}
@@ -1590,28 +1635,48 @@ void ListWidget::downloadSelected() {
 }
 
 void ListWidget::refreshDownloadStates() {
+	restoreDownloadStates();
 	auto downloading = false;
+	auto stale = std::vector<not_null<const HistoryItem*>>();
+	auto files = base::flat_map<Main::Session*, Menu::BatchDownloadFiles>();
 	for (auto &[item, state] : _batchDownloadStates) {
-		if (state == BatchDownloadState::Downloaded) {
-			continue;
-		}
 		const auto media = item->media();
 		const auto photo = media ? media->photo() : nullptr;
 		const auto document = media ? media->document() : nullptr;
 		const auto pathIt = _batchDownloadPaths.find(item);
-		const auto path = (pathIt != _batchDownloadPaths.end())
+		const auto active = (pathIt != _batchDownloadPaths.end());
+		const auto destination = (pathIt != _batchDownloadPaths.end())
 			? pathIt->second
 			: QString();
-		const auto next = document
-			? (document->loading()
-				? BatchDownloadState::Downloading
-				: (!path.isEmpty() && QFileInfo::exists(path))
-				? BatchDownloadState::Downloaded
-				: BatchDownloadState::Waiting)
+		const auto owner = &item->history()->session();
+		const auto filesIt = files.find(owner);
+		const auto &sessionFiles = (filesIt != files.end())
+			? filesIt->second
+			: files.emplace(
+				owner,
+				Menu::BatchDownloadFilesFor(owner)).first->second;
+		const auto persisted = sessionFiles.find(item->fullId());
+		const auto hasPersisted = (persisted != sessionFiles.end());
+		const auto downloaded = hasPersisted
+			&& persisted->second.completed
+			&& QFileInfo::exists(persisted->second.path)
+			&& (!active || persisted->second.path == destination);
+		const auto loading = document
+			? document->loading()
 			: photo
-			? (photo->loading()
-				? BatchDownloadState::Downloading
-				: BatchDownloadState::Waiting)
+			? photo->loading()
+			: false;
+		if ((!hasPersisted && !loading)
+			|| (state == BatchDownloadState::Downloaded
+				&& !downloaded
+				&& !loading)) {
+			stale.push_back(item);
+			continue;
+		}
+		const auto next = loading
+			? BatchDownloadState::Downloading
+			: downloaded
+			? BatchDownloadState::Downloaded
 			: BatchDownloadState::Waiting;
 		if (state != next) {
 			state = next;
@@ -1619,6 +1684,14 @@ void ListWidget::refreshDownloadStates() {
 		}
 		downloading = downloading
 			|| (state == BatchDownloadState::Downloading);
+	}
+	for (const auto &item : stale) {
+		_batchDownloadStates.remove(item);
+		_batchDownloadPaths.remove(item);
+		Menu::ForgetBatchDownloadFile(
+			&item->history()->session(),
+			item->fullId());
+		repaintItem(item);
 	}
 	if (downloading) {
 		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);

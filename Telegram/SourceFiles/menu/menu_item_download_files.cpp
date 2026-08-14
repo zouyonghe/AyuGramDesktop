@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
+#include "data/data_peer_id.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
@@ -39,6 +40,72 @@ namespace {
 
 using Documents = std::vector<std::pair<not_null<DocumentData*>, FullMsgId>>;
 using Photos = std::vector<std::pair<not_null<PhotoData*>, FullMsgId>>;
+using BatchDownloads = base::flat_map<FullMsgId, BatchDownloadFile>;
+
+constexpr auto kBatchDownloadsPref = "batch_download_files";
+constexpr auto kMaxBatchDownloads = 100000;
+
+BatchDownloads ReadBatchDownloads(not_null<Main::Session*> session) {
+	const auto serialized = session->local().readPref<QByteArray>(
+		kBatchDownloadsPref);
+	if (serialized.isEmpty()) {
+		return {};
+	}
+	auto stream = QDataStream(serialized);
+	stream.setVersion(QDataStream::Qt_5_1);
+	auto count = quint32();
+	stream >> count;
+	if (count > kMaxBatchDownloads) {
+		return {};
+	}
+	auto result = BatchDownloads();
+	result.reserve(count);
+	for (auto i = quint32(); i != count; ++i) {
+		auto peer = quint64();
+		auto message = qint64();
+		auto path = QString();
+		auto completed = quint8();
+		stream >> peer >> message >> path >> completed;
+		if (stream.status() != QDataStream::Ok) {
+			return {};
+		}
+		result.emplace(
+			FullMsgId(DeserializePeerId(peer), MsgId(message)),
+			BatchDownloadFile{ std::move(path), (completed != 0) });
+	}
+	return result;
+}
+
+void WriteBatchDownloads(
+		not_null<Main::Session*> session,
+		const BatchDownloads &downloads) {
+	auto serialized = QByteArray();
+	{
+		auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_5_1);
+		stream << quint32(downloads.size());
+		for (const auto &[id, file] : downloads) {
+			stream
+				<< SerializePeerId(id.peer)
+				<< qint64(id.msg.bare)
+				<< file.path
+				<< quint8(file.completed ? 1 : 0);
+		}
+	}
+	session->local().writePref<QByteArray>(
+		kBatchDownloadsPref,
+		std::move(serialized));
+}
+
+void SetBatchDownloadFile(
+		not_null<Main::Session*> session,
+		FullMsgId id,
+		QString path,
+		bool completed) {
+	auto downloads = ReadBatchDownloads(session);
+	downloads[id] = { std::move(path), completed };
+	WriteBatchDownloads(session, downloads);
+}
 
 [[nodiscard]] bool Added(
 		HistoryItem *item,
@@ -64,9 +131,10 @@ Fn<void()> PrepareDownloadAction(
 		Photos &&photos,
 		Fn<void()> callback,
 		bool forceDefaultPath,
-		Fn<void(FullMsgId, QString)> destination,
-		Fn<void(FullMsgId)> saved) {
+		Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination,
+		Fn<void(not_null<Main::Session*>, FullMsgId)> saved) {
 	const auto shouldShowToast = documents.empty();
+	const auto trackBatchDownload = (destination || saved);
 
 	const auto weak = base::make_weak(controller);
 	const auto saveImages = [=](const QString &folderPath) {
@@ -117,6 +185,8 @@ Fn<void()> PrepareDownloadAction(
 			};
 
 		struct PhotoDownload {
+			not_null<PhotoData*> photo;
+			base::weak_ptr<Main::Session> session;
 			std::shared_ptr<Data::PhotoMedia> view;
 			FullMsgId id;
 			TimeId date = 0;
@@ -128,6 +198,8 @@ Fn<void()> PrepareDownloadAction(
 				const auto photoDate = photo->date();
 				const auto item = session->data().message(fullId);
 				downloads.push_back({
+					.photo = photo,
+					.session = base::make_weak(&photo->session()),
 					.view = view,
 					.id = fullId,
 					.date = photoDate
@@ -138,12 +210,14 @@ Fn<void()> PrepareDownloadAction(
 		}
 
 		const auto finalCheck = [=] {
-			for (const auto &[photo, _] : photos) {
-				if (photo->loading()) {
-					return false;
+			for (const auto &download : downloads) {
+				if (!download.session.get()) {
+					return std::optional<bool>();
+				} else if (download.photo->loading()) {
+					return std::optional<bool>(false);
 				}
 			}
-			return true;
+			return std::optional<bool>(true);
 		};
 
 		const auto saveToFiles = [=] {
@@ -157,8 +231,15 @@ Fn<void()> PrepareDownloadAction(
 			for (auto i = 0; i < downloads.size(); i++) {
 				lastPath = fullPath(i + 1);
 				const auto &download = downloads[i];
+				const auto owner = download.session.get();
+				if (!owner) {
+					continue;
+				}
+				if (trackBatchDownload) {
+					SetBatchDownloadFile(owner, download.id, lastPath, false);
+				}
 				if (destination) {
-					destination(download.id, lastPath);
+					destination(owner, download.id, lastPath);
 				}
 				const auto savedToFile = download.view->saveToFile(lastPath);
 				if (savedToFile && download.date > 0) {
@@ -173,8 +254,17 @@ Fn<void()> PrepareDownloadAction(
 							QFileDevice::FileAccessTime);
 					}
 				}
-				if (savedToFile && saved) {
-					saved(download.id);
+				if (savedToFile && trackBatchDownload) {
+					SetBatchDownloadFile(
+						owner,
+						download.id,
+						lastPath,
+						true);
+					if (saved) {
+						saved(owner, download.id);
+					}
+				} else if (!savedToFile && trackBatchDownload) {
+					ForgetBatchDownloadFile(owner, download.id);
 				}
 			}
 			if (showToast) {
@@ -182,22 +272,32 @@ Fn<void()> PrepareDownloadAction(
 			}
 		};
 
-		if (finalCheck()) {
+		if (finalCheck().value_or(false)) {
 			saveToFiles();
 		} else {
 			auto lifetime = std::make_shared<rpl::lifetime>();
-			session->downloaderTaskFinished(
-			) | rpl::on_next([=]() mutable {
-				if (finalCheck()) {
-					saveToFiles();
-					base::take(lifetime)->destroy();
+			for (const auto &download : downloads) {
+				const auto owner = download.session.get();
+				if (!owner) {
+					continue;
 				}
-			}, *lifetime);
+				owner->data().photoLoadProgress(
+				) | rpl::on_next([=](not_null<PhotoData*>) mutable {
+					const auto ready = finalCheck();
+					if (!ready) {
+						base::take(lifetime)->destroy();
+					} else if (*ready) {
+						saveToFiles();
+						base::take(lifetime)->destroy();
+					}
+				}, *lifetime);
+			}
 		}
 	};
 	const auto saveDocuments = [=](const QString &folderPath) {
 		for (const auto &[document, origin] : documents) {
 			if (!folderPath.isEmpty()) {
+				const auto owner = &document->session();
 				const auto path = filedialogNextFilename(
 					document->filename(),
 					document->filepath(true),
@@ -206,11 +306,40 @@ Fn<void()> PrepareDownloadAction(
 					continue;
 				}
 				if (destination) {
-					destination(origin, path);
+					destination(owner, origin, path);
+				}
+				if (trackBatchDownload) {
+					SetBatchDownloadFile(owner, origin, path, false);
 				}
 				document->save(origin, path);
-				if (QFileInfo::exists(path) && saved) {
-					saved(origin);
+				if (document->loading() && trackBatchDownload) {
+					auto lifetime = std::make_shared<rpl::lifetime>();
+					document->owner().documentLoadProgress(
+					) | rpl::on_next([=](not_null<DocumentData*> changed) mutable {
+						if (changed != document) {
+							return;
+						}
+						if (document->loading()) {
+							return;
+						}
+						if (document->filepath(true) == path
+							&& QFileInfo::exists(path)) {
+							SetBatchDownloadFile(owner, origin, path, true);
+							if (saved) {
+								saved(owner, origin);
+							}
+						} else {
+							ForgetBatchDownloadFile(owner, origin);
+						}
+						base::take(lifetime)->destroy();
+					}, *lifetime);
+				} else if (QFileInfo::exists(path) && trackBatchDownload) {
+					SetBatchDownloadFile(owner, origin, path, true);
+					if (saved) {
+						saved(owner, origin);
+					}
+				} else if (trackBatchDownload) {
+					ForgetBatchDownloadFile(owner, origin);
 				}
 			} else {
 				DocumentSaveClickHandler::SaveAndTrack(origin, document);
@@ -296,13 +425,27 @@ void AddAction(
 
 } // namespace
 
+BatchDownloadFiles BatchDownloadFilesFor(
+		not_null<Main::Session*> session) {
+	return ReadBatchDownloads(session);
+}
+
+void ForgetBatchDownloadFile(
+		not_null<Main::Session*> session,
+		FullMsgId id) {
+	auto downloads = ReadBatchDownloads(session);
+	if (downloads.remove(id)) {
+		WriteBatchDownloads(session, downloads);
+	}
+}
+
 bool DownloadSelectedFiles(
 		not_null<Window::SessionController*> window,
 		const std::vector<not_null<HistoryItem*>> &items,
 		Fn<void()> callback,
 		bool forceDefaultPath,
-		Fn<void(FullMsgId, QString)> destination,
-		Fn<void(FullMsgId)> saved) {
+		Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination,
+		Fn<void(not_null<Main::Session*>, FullMsgId)> saved) {
 	auto documents = Documents();
 	auto photos = Photos();
 	for (const auto &item : items) {

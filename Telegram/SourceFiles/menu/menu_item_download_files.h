@@ -19,19 +19,36 @@ class ListWidget;
 struct SelectedItem;
 } // namespace HistoryView
 
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Window {
 class SessionController;
 } // namespace Window
 
 namespace Menu {
 
+struct BatchDownloadFile {
+	QString path;
+	bool completed = false;
+};
+
+using BatchDownloadFiles = base::flat_map<FullMsgId, BatchDownloadFile>;
+
+[[nodiscard]] BatchDownloadFiles BatchDownloadFilesFor(
+	not_null<Main::Session*> session);
+void ForgetBatchDownloadFile(
+	not_null<Main::Session*> session,
+	FullMsgId id);
+
 [[nodiscard]] bool DownloadSelectedFiles(
 	not_null<Window::SessionController*> window,
 	const std::vector<not_null<HistoryItem*>> &items,
 	Fn<void()> callback = nullptr,
 	bool forceDefaultPath = false,
-	Fn<void(FullMsgId, QString)> destination = nullptr,
-	Fn<void(FullMsgId)> saved = nullptr);
+	Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination = nullptr,
+	Fn<void(not_null<Main::Session*>, FullMsgId)> saved = nullptr);
 
 void AddDownloadFilesAction(
 	not_null<Ui::PopupMenu*> menu,

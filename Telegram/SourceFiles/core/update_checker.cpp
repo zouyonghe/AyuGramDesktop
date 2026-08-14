@@ -966,7 +966,7 @@ void HttpLoaderActor::partFailed(QNetworkReply::NetworkError e) {
 	_parent->threadSafeFailed();
 }
 
-MtpChecker::MtpChecker(
+[[maybe_unused]] MtpChecker::MtpChecker(
 	base::weak_ptr<Main::Session> session,
 	bool testing)
 : Checker(testing)

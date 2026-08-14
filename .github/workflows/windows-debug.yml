@@ -18,6 +18,17 @@ jobs:
         shell: cmd
 
     steps:
+      - name: Free runner disk space
+        shell: pwsh
+        run: |
+          @(
+            $env:ANDROID_HOME,
+            "C:\ghcup"
+          ) | Where-Object { $_ -and (Test-Path $_) } | ForEach-Object {
+            Remove-Item -Recurse -Force $_
+          }
+          Get-PSDrive C
+
       - name: Prepare directories
         run: |
           mkdir %userprofile%\TBuild\Libraries
@@ -106,7 +117,7 @@ jobs:
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
-          cmake --build ..\out --config Debug --parallel 2
+          cmake --build ..\out --config Debug --parallel 1
 
       - name: Check output
         run: |

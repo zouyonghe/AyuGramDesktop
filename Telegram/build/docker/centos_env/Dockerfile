@@ -433,6 +433,11 @@ FROM builder AS rnnoise
 RUN --mount=type=cache,target=/var/cache/ccache <<EOF
 git clone -b v0.2 --depth=1 https://github.com/xiph/rnnoise.git
 cd rnnoise
+curl --fail --location --retry 5 --connect-timeout 20 \
+	--output rnnoise_data-0b50c45.tar.gz \
+	https://distfiles.alpinelinux.org/distfiles/edge/rnnoise_data-0b50c45.tar.gz
+echo "4ac81c5c0884ec4bd5907026aaae16209b7b76cd9d7f71af582094a2f98f4b43  rnnoise_data-0b50c45.tar.gz" \
+	| sha256sum --check -
 ./autogen.sh
 ./configure --enable-static --disable-shared
 make -j$(nproc)

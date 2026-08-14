@@ -8628,6 +8628,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_MediaDownloadWaiting" = "Waiting";
 "ayu_MediaDownloadDownloading" = "Downloading";
 "ayu_MediaDownloadDownloaded" = "Downloaded";
+"ayu_MediaDownloadFailed" = "Failed";
+"ayu_MediaDownloadFailedToast" = "Some files could not be downloaded.";
 "ayu_DocsText" = "Documentation";
 "ayu_CategoryGeneral" = "General";
 "ayu_CategoryAppearance" = "Appearance";

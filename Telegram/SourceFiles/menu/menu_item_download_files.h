@@ -29,12 +29,7 @@ class SessionController;
 
 namespace Menu {
 
-struct BatchDownloadFile {
-	QString path;
-	bool completed = false;
-};
-
-using BatchDownloadFiles = base::flat_map<FullMsgId, BatchDownloadFile>;
+using BatchDownloadFiles = base::flat_map<FullMsgId, QString>;
 
 [[nodiscard]] BatchDownloadFiles BatchDownloadFilesFor(
 	not_null<Main::Session*> session);
@@ -48,7 +43,8 @@ void ForgetBatchDownloadFile(
 	Fn<void()> callback = nullptr,
 	bool forceDefaultPath = false,
 	Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination = nullptr,
-	Fn<void(not_null<Main::Session*>, FullMsgId)> saved = nullptr);
+	Fn<void(not_null<Main::Session*>, FullMsgId)> saved = nullptr,
+	Fn<void(not_null<Main::Session*>, FullMsgId)> failed = nullptr);
 
 void AddDownloadFilesAction(
 	not_null<Ui::PopupMenu*> menu,

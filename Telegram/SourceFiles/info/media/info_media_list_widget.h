@@ -132,6 +132,7 @@ private:
 		Waiting,
 		Downloading,
 		Downloaded,
+		Failed,
 	};
 	using Section = ListSection;
 	using FoundItem = ListFoundItem;
@@ -233,6 +234,8 @@ private:
 	[[nodiscard]] MessageIdsList collectSelectedIds() const;
 	[[nodiscard]] MessageIdsList collectSelectedIds(
 		const SelectedItems &items) const;
+	[[nodiscard]] bool canDownloadItem(
+		not_null<const HistoryItem*> item) const;
 	void pushSelectedItems();
 	[[nodiscard]] bool hasSelected() const;
 	[[nodiscard]] bool isSelectedItem(

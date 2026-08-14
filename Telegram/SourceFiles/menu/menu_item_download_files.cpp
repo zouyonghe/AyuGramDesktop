@@ -40,7 +40,7 @@ namespace {
 
 using Documents = std::vector<std::pair<not_null<DocumentData*>, FullMsgId>>;
 using Photos = std::vector<std::pair<not_null<PhotoData*>, FullMsgId>>;
-using BatchDownloads = base::flat_map<FullMsgId, BatchDownloadFile>;
+using BatchDownloads = BatchDownloadFiles;
 
 constexpr auto kBatchDownloadsPref = "batch_download_files";
 constexpr auto kMaxBatchDownloads = 100000;
@@ -69,9 +69,11 @@ BatchDownloads ReadBatchDownloads(not_null<Main::Session*> session) {
 		if (stream.status() != QDataStream::Ok) {
 			return {};
 		}
-		result.emplace(
-			FullMsgId(DeserializePeerId(peer), MsgId(message)),
-			BatchDownloadFile{ std::move(path), (completed != 0) });
+		if (completed) {
+			result.emplace(
+				FullMsgId(DeserializePeerId(peer), MsgId(message)),
+				std::move(path));
+		}
 	}
 	return result;
 }
@@ -84,12 +86,12 @@ void WriteBatchDownloads(
 		auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
 		stream << quint32(downloads.size());
-		for (const auto &[id, file] : downloads) {
+		for (const auto &[id, path] : downloads) {
 			stream
 				<< SerializePeerId(id.peer)
 				<< qint64(id.msg.bare)
-				<< file.path
-				<< quint8(file.completed ? 1 : 0);
+				<< path
+				<< quint8(1);
 		}
 	}
 	session->local().writePref<QByteArray>(
@@ -97,14 +99,54 @@ void WriteBatchDownloads(
 		std::move(serialized));
 }
 
-void SetBatchDownloadFile(
+void CompleteBatchDownloadFiles(
+		not_null<Main::Session*> session,
+		BatchDownloads completed) {
+	auto downloads = ReadBatchDownloads(session);
+	for (auto &[id, path] : completed) {
+		downloads[id] = std::move(path);
+	}
+	WriteBatchDownloads(session, downloads);
+}
+
+void CompleteBatchDownloadFile(
 		not_null<Main::Session*> session,
 		FullMsgId id,
-		QString path,
-		bool completed) {
-	auto downloads = ReadBatchDownloads(session);
-	downloads[id] = { std::move(path), completed };
-	WriteBatchDownloads(session, downloads);
+		QString path) {
+	auto updates = BatchDownloads();
+	updates.emplace(id, std::move(path));
+	CompleteBatchDownloadFiles(session, std::move(updates));
+}
+
+QString DefaultDownloadPath(not_null<Main::Session*> session) {
+	const auto configured = Core::App().settings().downloadPath();
+	return configured.isEmpty()
+		? File::DefaultDownloadPath(session)
+		: (configured == FileDialog::Tmp())
+		? session->local().tempDirectory()
+		: configured;
+}
+
+bool DocumentSavedToPath(
+		not_null<DocumentData*> document,
+		const QString &path) {
+	const auto info = QFileInfo(path);
+	return info.exists()
+		&& info.size() == document->size;
+}
+
+QString NumberedFilename(const QString &name, int index) {
+	if (index == 1) {
+		return name;
+	}
+	const auto extensionIndex = name.lastIndexOf('.');
+	const auto prefix = (extensionIndex >= 0)
+		? name.mid(0, extensionIndex)
+		: name;
+	const auto extension = (extensionIndex >= 0)
+		? name.mid(extensionIndex)
+		: QString();
+	return prefix + u" (%1)"_q.arg(index) + extension;
 }
 
 [[nodiscard]] bool Added(
@@ -132,25 +174,30 @@ Fn<void()> PrepareDownloadAction(
 		Fn<void()> callback,
 		bool forceDefaultPath,
 		Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination,
-		Fn<void(not_null<Main::Session*>, FullMsgId)> saved) {
+		Fn<void(not_null<Main::Session*>, FullMsgId)> saved,
+		Fn<void(not_null<Main::Session*>, FullMsgId)> failed) {
 	const auto shouldShowToast = documents.empty();
-	const auto trackBatchDownload = (destination || saved);
+	const auto trackBatchDownload = (destination || saved || failed);
 
 	const auto weak = base::make_weak(controller);
+	const auto failureShown = std::make_shared<bool>(false);
+	const auto showFailure = [=] {
+		if (std::exchange(*failureShown, true)) {
+			return;
+		}
+		if (const auto controller = weak.get()) {
+			controller->showToast(tr::ayu_MediaDownloadFailedToast(tr::now));
+		}
+	};
 	const auto saveImages = [=](const QString &folderPath) {
 		const auto controller = weak.get();
 		if (!controller) {
 			return;
 		}
 		const auto session = &controller->session();
-		const auto downloadPath = folderPath.isEmpty()
-			? Core::App().settings().downloadPath()
+		const auto path = folderPath.isEmpty()
+			? DefaultDownloadPath(session)
 			: folderPath;
-		const auto path = downloadPath.isEmpty()
-			? File::DefaultDownloadPath(session)
-			: (downloadPath == FileDialog::Tmp())
-			? session->local().tempDirectory()
-			: downloadPath;
 		if (path.isEmpty()) {
 			return;
 		}
@@ -193,10 +240,10 @@ Fn<void()> PrepareDownloadAction(
 		};
 		auto downloads = std::vector<PhotoDownload>();
 		for (const auto &[photo, fullId] : photos) {
+			photo->clearFailed(Data::PhotoSize::Large);
 			if (const auto view = photo->createMediaView()) {
-				view->wanted(Data::PhotoSize::Large, fullId);
 				const auto photoDate = photo->date();
-				const auto item = session->data().message(fullId);
+				const auto item = photo->session().data().message(fullId);
 				downloads.push_back({
 					.photo = photo,
 					.session = base::make_weak(&photo->session()),
@@ -206,44 +253,91 @@ Fn<void()> PrepareDownloadAction(
 						? photoDate
 						: (item ? item->date() : TimeId(0)),
 				});
+			} else {
+				if (trackBatchDownload) {
+					ForgetBatchDownloadFile(&photo->session(), fullId);
+				}
+				if (failed) {
+					failed(&photo->session(), fullId);
+				}
+				showFailure();
 			}
 		}
-
+		const auto reportedFailures = std::make_shared<
+			base::flat_set<std::pair<Main::Session*, FullMsgId>>>();
+		const auto reportFailure = [=](const PhotoDownload &download) {
+			const auto owner = download.session.get();
+			if (!owner
+				|| !reportedFailures->emplace(owner, download.id).second) {
+				return;
+			}
+			if (trackBatchDownload) {
+				ForgetBatchDownloadFile(owner, download.id);
+			}
+			if (failed) {
+				failed(owner, download.id);
+			}
+			showFailure();
+		};
+		const auto endedSessions = std::make_shared<
+			base::flat_set<Main::Session*>>();
 		const auto finalCheck = [=] {
 			for (const auto &download : downloads) {
-				if (!download.session.get()) {
-					return std::optional<bool>();
-				} else if (download.photo->loading()) {
-					return std::optional<bool>(false);
+				const auto owner = download.session.get();
+				if (owner
+					&& !endedSessions->contains(owner)
+					&& !download.photo->failed(Data::PhotoSize::Large)
+					&& !download.view->loaded()) {
+					return false;
 				}
 			}
-			return std::optional<bool>(true);
+			return true;
 		};
 
 		const auto saveToFiles = [=] {
-			const auto fullPath = [&](int i) {
-				return filedialogDefaultName(
-					u"photo_"_q + QString::number(i),
-					u".jpg"_q,
-					path);
-			};
-			auto lastPath = QString();
-			for (auto i = 0; i < downloads.size(); i++) {
-				lastPath = fullPath(i + 1);
+			auto lastSavedPath = QString();
+			auto allSaved = (downloads.size() == photos.size());
+			auto completed = base::flat_map<Main::Session*, BatchDownloads>();
+			auto savedResults = std::vector<
+				std::pair<not_null<Main::Session*>, FullMsgId>>();
+			auto failedResults = std::vector<
+				std::pair<not_null<Main::Session*>, FullMsgId>>();
+			for (auto i = 0; i != int(downloads.size()); ++i) {
 				const auto &download = downloads[i];
 				const auto owner = download.session.get();
 				if (!owner) {
+					allSaved = false;
 					continue;
 				}
-				if (trackBatchDownload) {
-					SetBatchDownloadFile(owner, download.id, lastPath, false);
+				if (download.photo->failed(Data::PhotoSize::Large)
+					|| !download.view->loaded()) {
+					if (download.photo->failed(Data::PhotoSize::Large)) {
+						reportFailure(download);
+					} else {
+						failedResults.emplace_back(owner, download.id);
+					}
+					allSaved = false;
+					continue;
+				}
+				const auto name = u"photo_"_q
+					+ QString::number(i + 1)
+					+ u".jpg"_q;
+				const auto destinationPath = filedialogNextFilename(
+					name,
+					QString(),
+					path);
+				if (destinationPath.isEmpty()) {
+					failedResults.emplace_back(owner, download.id);
+					allSaved = false;
+					continue;
 				}
 				if (destination) {
-					destination(owner, download.id, lastPath);
+					destination(owner, download.id, destinationPath);
 				}
-				const auto savedToFile = download.view->saveToFile(lastPath);
+				const auto savedToFile = download.view->saveToFile(
+					destinationPath);
 				if (savedToFile && download.date > 0) {
-					auto f = QFile(lastPath);
+					auto f = QFile(destinationPath);
 					if (f.open(QIODevice::ReadWrite)) {
 						const auto when = base::unixtime::parse(download.date);
 						f.setFileTime(
@@ -255,95 +349,167 @@ Fn<void()> PrepareDownloadAction(
 					}
 				}
 				if (savedToFile && trackBatchDownload) {
-					SetBatchDownloadFile(
-						owner,
-						download.id,
-						lastPath,
-						true);
-					if (saved) {
-						saved(owner, download.id);
-					}
-				} else if (!savedToFile && trackBatchDownload) {
-					ForgetBatchDownloadFile(owner, download.id);
+					completed[owner][download.id] = destinationPath;
+					savedResults.emplace_back(owner, download.id);
+				} else if (!savedToFile) {
+					failedResults.emplace_back(owner, download.id);
+				}
+				if (savedToFile) {
+					lastSavedPath = destinationPath;
+				} else {
+					QFile::remove(destinationPath);
+					allSaved = false;
 				}
 			}
-			if (showToast) {
-				showToast(lastPath);
+			for (auto &[owner, files] : completed) {
+				CompleteBatchDownloadFiles(owner, std::move(files));
+			}
+			if (saved) {
+				for (const auto &[owner, id] : savedResults) {
+					saved(owner, id);
+				}
+			}
+			for (const auto &[owner, id] : failedResults) {
+				if (trackBatchDownload) {
+					ForgetBatchDownloadFile(owner, id);
+				}
+				if (failed) {
+					failed(owner, id);
+				}
+			}
+			if (showToast && allSaved && !lastSavedPath.isEmpty()) {
+				showToast(lastSavedPath);
+			} else if (!allSaved) {
+				showFailure();
 			}
 		};
 
-		if (finalCheck().value_or(false)) {
+		if (finalCheck()) {
 			saveToFiles();
 		} else {
 			auto lifetime = std::make_shared<rpl::lifetime>();
+			const auto finished = std::make_shared<bool>(false);
+			const auto finish = [=] {
+				if (finalCheck() && !std::exchange(*finished, true)) {
+					saveToFiles();
+					lifetime->destroy();
+				}
+			};
 			for (const auto &download : downloads) {
 				const auto owner = download.session.get();
 				if (!owner) {
 					continue;
 				}
 				owner->data().photoLoadProgress(
-				) | rpl::on_next([=](not_null<PhotoData*>) mutable {
-					const auto ready = finalCheck();
-					if (!ready) {
-						base::take(lifetime)->destroy();
-					} else if (*ready) {
-						saveToFiles();
-						base::take(lifetime)->destroy();
+				) | rpl::on_next_done([=](not_null<PhotoData*> changed) mutable {
+					if (changed->failed(Data::PhotoSize::Large)) {
+						for (const auto &download : downloads) {
+							if (download.photo == changed) {
+								reportFailure(download);
+							}
+						}
 					}
+					finish();
+				}, [=]() mutable {
+					endedSessions->emplace(owner);
+					finish();
 				}, *lifetime);
 			}
+			for (const auto &download : downloads) {
+				download.view->wanted(Data::PhotoSize::Large, download.id);
+				if (download.photo->failed(Data::PhotoSize::Large)) {
+					reportFailure(download);
+				}
+			}
+			finish();
 		}
 	};
 	const auto saveDocuments = [=](const QString &folderPath) {
-		for (const auto &[document, origin] : documents) {
-			if (!folderPath.isEmpty()) {
-				const auto owner = &document->session();
-				const auto path = filedialogNextFilename(
-					document->filename(),
-					document->filepath(true),
-					folderPath);
-				if (path.isEmpty()) {
-					continue;
-				}
-				if (destination) {
-					destination(owner, origin, path);
-				}
-				if (trackBatchDownload) {
-					SetBatchDownloadFile(owner, origin, path, false);
-				}
-				document->save(origin, path);
-				if (document->loading() && trackBatchDownload) {
-					auto lifetime = std::make_shared<rpl::lifetime>();
-					document->owner().documentLoadProgress(
-					) | rpl::on_next([=](not_null<DocumentData*> changed) mutable {
-						if (changed != document) {
-							return;
-						}
-						if (document->loading()) {
-							return;
-						}
-						if (document->filepath(true) == path
-							&& QFileInfo::exists(path)) {
-							SetBatchDownloadFile(owner, origin, path, true);
-							if (saved) {
-								saved(owner, origin);
-							}
-						} else {
-							ForgetBatchDownloadFile(owner, origin);
-						}
-						base::take(lifetime)->destroy();
-					}, *lifetime);
-				} else if (QFileInfo::exists(path) && trackBatchDownload) {
-					SetBatchDownloadFile(owner, origin, path, true);
-					if (saved) {
-						saved(owner, origin);
-					}
-				} else if (trackBatchDownload) {
-					ForgetBatchDownloadFile(owner, origin);
-				}
-			} else {
+		if (folderPath.isEmpty()) {
+			for (const auto &[document, origin] : documents) {
 				DocumentSaveClickHandler::SaveAndTrack(origin, document);
 			}
+			return;
+		}
+		auto nameCounts = base::flat_map<QString, int>();
+		auto reservedPaths = base::flat_set<QString>();
+		for (const auto &[document, origin] : documents) {
+			const auto owner = &document->session();
+			const auto filename = QFileInfo(
+				document->filename()).fileName();
+			const auto safeFilename = (filename.isEmpty()
+				|| filename == u"."_q
+				|| filename == u".."_q)
+				? u"file"_q
+				: filename;
+			auto path = QString();
+			do {
+				const auto downloadName = NumberedFilename(
+					safeFilename,
+					++nameCounts[safeFilename]);
+				path = filedialogNextFilename(
+					downloadName,
+					document->filepath(true),
+					folderPath);
+			} while (!path.isEmpty()
+				&& !reservedPaths.emplace(path.toCaseFolded()).second);
+			if (path.isEmpty()) {
+				if (failed) {
+					failed(owner, origin);
+				}
+				showFailure();
+				continue;
+			}
+			if (destination) {
+				destination(owner, origin, path);
+			}
+			auto lifetime = std::make_shared<rpl::lifetime>();
+			const auto finished = std::make_shared<bool>(false);
+			const auto weakOwner = base::make_weak(owner);
+			const auto finishFailed = [=](not_null<Main::Session*> owner) {
+				QFile::remove(path);
+				if (trackBatchDownload) {
+					ForgetBatchDownloadFile(owner, origin);
+					if (failed) {
+						failed(owner, origin);
+					}
+				}
+				showFailure();
+			};
+			const auto finish = [=] {
+				if (document->loading()
+					|| std::exchange(*finished, true)) {
+					return;
+				}
+				if (DocumentSavedToPath(document, path)) {
+					if (trackBatchDownload) {
+						CompleteBatchDownloadFile(owner, origin, path);
+						if (saved) {
+							saved(owner, origin);
+						}
+					}
+				} else {
+					finishFailed(owner);
+				}
+				lifetime->destroy();
+			};
+			document->owner().documentLoadProgress(
+			) | rpl::on_next_done([=](not_null<DocumentData*> changed) {
+				if (changed == document) {
+					finish();
+				}
+			}, [=] {
+				if (!std::exchange(*finished, true)) {
+					if (const auto owner = weakOwner.get()) {
+						finishFailed(owner);
+					} else {
+						QFile::remove(path);
+					}
+				}
+				lifetime->destroy();
+			}, *lifetime);
+			document->save(origin, path);
+			finish();
 		}
 	};
 
@@ -383,12 +549,7 @@ Fn<void()> PrepareDownloadAction(
 				handleFolder);
 		} else if (forceDefaultPath) {
 			const auto session = &controller->session();
-			const auto configured = Core::App().settings().downloadPath();
-			const auto path = configured.isEmpty()
-				? File::DefaultDownloadPath(session)
-				: (configured == FileDialog::Tmp())
-				? session->local().tempDirectory()
-				: configured;
+			const auto path = DefaultDownloadPath(session);
 			if (!path.isEmpty()) {
 				save(path.endsWith('/') ? path : (path + '/'));
 			}
@@ -419,6 +580,7 @@ void AddAction(
 			std::move(callback),
 			false,
 			nullptr,
+			nullptr,
 			nullptr),
 		icon);
 }
@@ -445,7 +607,8 @@ bool DownloadSelectedFiles(
 		Fn<void()> callback,
 		bool forceDefaultPath,
 		Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination,
-		Fn<void(not_null<Main::Session*>, FullMsgId)> saved) {
+		Fn<void(not_null<Main::Session*>, FullMsgId)> saved,
+		Fn<void(not_null<Main::Session*>, FullMsgId)> failed) {
 	auto documents = Documents();
 	auto photos = Photos();
 	for (const auto &item : items) {
@@ -456,6 +619,13 @@ bool DownloadSelectedFiles(
 	if (items.empty()) {
 		return false;
 	}
+	if (forceDefaultPath) {
+		const auto path = DefaultDownloadPath(&window->session());
+		if (path.isEmpty() || !QDir().mkpath(path)) {
+			window->showToast(tr::lng_download_path_failed(tr::now));
+			return false;
+		}
+	}
 	PrepareDownloadAction(
 		window,
 		std::move(documents),
@@ -463,7 +633,8 @@ bool DownloadSelectedFiles(
 		std::move(callback),
 		forceDefaultPath,
 		std::move(destination),
-		std::move(saved))();
+		std::move(saved),
+		std::move(failed))();
 	return true;
 }
 
@@ -485,12 +656,12 @@ void AddDownloadFilesAction(
 			return;
 		}
 	}
-       std::sort(docs.begin(), docs.end(), [](const auto &a, const auto &b) {
-               return a.second < b.second;
-       });
-       std::sort(photos.begin(), photos.end(), [](const auto &a, const auto &b) {
-               return a.second < b.second;
-       });
+	std::sort(docs.begin(), docs.end(), [](const auto &a, const auto &b) {
+		return a.second < b.second;
+	});
+	std::sort(photos.begin(), photos.end(), [](const auto &a, const auto &b) {
+		return a.second < b.second;
+	});
 	const auto done = [weak = base::make_weak(list)] {
 		if (const auto strong = weak.get()) {
 			strong->cancelSelection();
@@ -514,12 +685,12 @@ void AddDownloadFilesAction(
 			return;
 		}
 	}
-       std::sort(docs.begin(), docs.end(), [](const auto &a, const auto &b) {
-               return a.second < b.second;
-       });
-       std::sort(photos.begin(), photos.end(), [](const auto &a, const auto &b) {
-               return a.second < b.second;
-       });
+	std::sort(docs.begin(), docs.end(), [](const auto &a, const auto &b) {
+		return a.second < b.second;
+	});
+	std::sort(photos.begin(), photos.end(), [](const auto &a, const auto &b) {
+		return a.second < b.second;
+	});
 	const auto done = [weak = base::make_weak(list)] {
 		if (const auto strong = weak.get()) {
 			strong->clearSelected();

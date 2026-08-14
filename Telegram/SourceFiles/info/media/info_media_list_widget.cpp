@@ -1632,10 +1632,10 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 			continue;
 		}
 		const auto text = (state == BatchDownloadState::Waiting)
-			? tr::lng_media_download_waiting(tr::now)
+			? tr::ayu_MediaDownloadWaiting(tr::now)
 			: (state == BatchDownloadState::Downloading)
-			? tr::lng_media_download_downloading(tr::now)
-			: tr::lng_media_download_downloaded(tr::now);
+			? tr::ayu_MediaDownloadDownloading(tr::now)
+			: tr::ayu_MediaDownloadDownloaded(tr::now);
 		const auto textWidth = st::infoMediaDownloadStatusFont->width(text);
 		const auto badge = QRect(
 			found->geometry.right()

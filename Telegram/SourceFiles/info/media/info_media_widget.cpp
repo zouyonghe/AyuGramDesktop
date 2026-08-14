@@ -184,7 +184,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}, &st::menuIconZoomOut);
 	}
 	const auto batchSelection = addAction(
-		tr::lng_media_batch_selection(tr::now),
+		tr::ayu_MediaBatchSelection(tr::now),
 		[=] {
 				_inner->setBatchSelectionEnabled(
 					!_inner->batchSelectionEnabled());

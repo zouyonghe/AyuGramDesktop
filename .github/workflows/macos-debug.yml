@@ -2,7 +2,16 @@ name: macOS Debug
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA, branch, or tag to build
+        required: false
+        type: string
 
 jobs:
   macos:
@@ -22,6 +31,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
           path: ${{ env.REPO_NAME }}
 
       - name: Set up build tools

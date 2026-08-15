@@ -1616,6 +1616,21 @@ void ListWidget::showContextMenu(
 	_contextMenu = base::make_unique_q<Ui::PopupMenu>(
 		this,
 		st::popupMenuWithIcons);
+	const auto addShowInFolderAction = [&](const QString &filepath) {
+		if (filepath.isEmpty()) {
+			return;
+		}
+		const auto handler = base::fn_delayed(
+			st::defaultDropdownMenu.menu.ripple.hideDuration,
+			this,
+			[filepath] { File::ShowInFolder(filepath); });
+		_contextMenu->addAction(
+			(Platform::IsMac()
+				? tr::lng_context_show_in_finder(tr::now)
+				: tr::lng_context_show_in_folder(tr::now)),
+			std::move(handler),
+			&st::menuIconShowInFolder);
+	};
 	if (item->isHistoryEntry()) {
 		_contextMenu->addAction(
 			tr::lng_context_to_msg(tr::now),
@@ -1639,6 +1654,14 @@ void ListWidget::showContextMenu(
 	const auto externalState = _controller->isDownloads()
 		? Core::App().downloadManager().loadingExternalState(item)
 		: std::optional<ExternalState>();
+	const auto downloadData = batchDownloadData(item);
+	const auto downloadedPath = (downloadData
+		&& downloadData->state == BatchDownloadState::Downloaded
+		&& !downloadData->path.isEmpty()
+		&& QFileInfo::exists(downloadData->path))
+		? downloadData->path
+		: QString();
+	addShowInFolderAction(downloadedPath);
 	if (externalState && !externalState->done) {
 		_contextMenu->addAction(
 			tr::lng_context_cancel_download(tr::now),
@@ -1659,22 +1682,10 @@ void ListWidget::showContextMenu(
 					},
 					&st::menuIconCancel);
 			} else {
-				const auto filepath = _provider->showInFolderPath(
-					item,
-					lnkDocument);
-				if (!filepath.isEmpty()) {
-					const auto handler = base::fn_delayed(
-						st::defaultDropdownMenu.menu.ripple.hideDuration,
-						this,
-						[filepath] {
-							File::ShowInFolder(filepath);
-						});
-					_contextMenu->addAction(
-						(Platform::IsMac()
-							? tr::lng_context_show_in_finder(tr::now)
-							: tr::lng_context_show_in_folder(tr::now)),
-						std::move(handler),
-						&st::menuIconShowInFolder);
+				if (downloadedPath.isEmpty()) {
+					addShowInFolderAction(_provider->showInFolderPath(
+						item,
+						lnkDocument));
 				}
 				const auto handler = base::fn_delayed(
 					st::defaultDropdownMenu.menu.ripple.hideDuration,

@@ -44,6 +44,7 @@ public:
 	, paused(paused) {
 	}
 	bool skipBorder = false;
+	bool skipSelectionCheck = false;
 	bool paused = false;
 
 };

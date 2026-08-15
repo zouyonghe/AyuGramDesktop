@@ -51,6 +51,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "ui/controls/delete_message_context_action.h"
 #include "ui/chat/chat_style.h"
+#include "ui/effects/round_checkbox.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
@@ -1443,6 +1444,7 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 	context.scrollCache = &_rowsScrollCache;
 	context.hoveredItem = _overLayout;
 	context.bg = _controller->listBackground();
+	context.layoutContext.skipSelectionCheck = _batchSelectionEnabled;
 	if (_mouseAction == MouseAction::Reordering && _reorderState.item) {
 		context.draggedItem = _reorderState.item;
 	}
@@ -1452,6 +1454,7 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 		it->paint(p, context, clip.translated(0, -top), outerWidth);
 		p.translate(0, -top);
 	}
+	paintSelectionStates(p, clip);
 	if (fromSectionIt != _sections.end()) {
 		fromSectionIt->paintFloatingHeader(p, _visibleTop, outerWidth);
 	}
@@ -2271,6 +2274,75 @@ void ListWidget::refreshDownloadStates() {
 	}
 	if (active) {
 		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
+	}
+}
+
+void ListWidget::paintSelectionStates(Painter &p, QRect clip) {
+	if (!_batchSelectionEnabled
+		|| (_selected.empty() && _dragSelected.empty())) {
+		return;
+	}
+	if (!_selectionRoundCheckbox) {
+		_selectionRoundCheckbox = std::make_unique<Ui::RoundCheckbox>(
+			st::msgSelectionCheck,
+			[this] { update(); });
+	}
+	_selectionRoundCheckbox->setChecked(true, anim::type::normal);
+
+	const auto &style = st::msgSelectionCheck;
+	const auto selected = [&](not_null<const HistoryItem*> item) {
+		if (const auto i = _dragSelected.find(item);
+			i != _dragSelected.end()) {
+			return _dragSelectAction == DragSelectAction::Selecting;
+		}
+		return isSelectedItem(_selected.find(item));
+	};
+	for (const auto &[item, selection] : _selected) {
+		if (selection.text != FullSelection || !selected(item)) {
+			continue;
+		}
+		const auto found = findItemByItem(item);
+		if (!found || !found->geometry.intersects(clip)) {
+			continue;
+		}
+		const auto position = QPoint(
+			found->geometry.right()
+				- st::infoMediaSelectionMargin
+				- style.size,
+			found->geometry.top() + st::infoMediaSelectionMargin);
+		p.setPen(QPen(style.border, style.width));
+		p.setBrush(st::infoMediaDownloadStatusBg);
+		p.drawEllipse(QRect(position, Size(style.size)));
+		_selectionRoundCheckbox->paint(
+			p,
+			position.x(),
+			position.y(),
+			found->geometry.width());
+	}
+	if (_dragSelectAction == DragSelectAction::Selecting) {
+		for (const auto &entry : _dragSelected) {
+			const auto item = entry.first;
+			if (_selected.contains(item)) {
+				continue;
+			}
+			const auto found = findItemByItem(item);
+			if (!found || !found->geometry.intersects(clip)) {
+				continue;
+			}
+			const auto position = QPoint(
+				found->geometry.right()
+					- st::infoMediaSelectionMargin
+					- style.size,
+				found->geometry.top() + st::infoMediaSelectionMargin);
+			p.setPen(QPen(style.border, style.width));
+			p.setBrush(st::infoMediaDownloadStatusBg);
+			p.drawEllipse(QRect(position, Size(style.size)));
+			_selectionRoundCheckbox->paint(
+				p,
+				position.x(),
+				position.y(),
+				found->geometry.width());
+		}
 	}
 }
 

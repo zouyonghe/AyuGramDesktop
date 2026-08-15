@@ -89,6 +89,7 @@ infoMediaDownloadStatusBg: windowBgOver;
 infoMediaDownloadStatusPadding: margins(6px, 3px, 6px, 3px);
 infoMediaDownloadStatusMargin: 6px;
 infoMediaDownloadStatusRadius: 4px;
+infoMediaSelectionMargin: 6px;
 
 infoMediaSearch: SearchFieldRow {
 	height: 44px;

@@ -43,6 +43,10 @@ namespace Window {
 class SessionController;
 } // namespace Window
 
+namespace Ui {
+class RoundCheckbox;
+} // namespace Ui
+
 namespace Info {
 
 class AbstractController;
@@ -269,6 +273,7 @@ private:
 	void restoreDownloadStates();
 	void updateDownloadProgress();
 	void refreshDownloadStates();
+	void paintSelectionStates(Painter &p, QRect clip);
 	void paintDownloadStates(Painter &p, QRect clip);
 	void forwardItem(GlobalMsgId globalId);
 	void forwardItems(MessageIdsList &&items);
@@ -432,6 +437,7 @@ private:
 	int _storiesAddToAlbumTotal = 0;
 	base::flat_set<StoryId> _storiesInAlbum;
 	base::flat_set<MsgId> _storyMsgsToMarkSelected;
+	std::unique_ptr<Ui::RoundCheckbox> _selectionRoundCheckbox;
 	std::unique_ptr<StickerPremiumMark> _hiddenMark;
 
 	base::unique_qptr<Ui::PopupMenu> _contextMenu;

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "menu/menu_item_download_files.h"
 
+#include <limits>
+
 #include "base/base_file_utilities.h"
 #include "base/unixtime.h"
 #include "core/application.h"
@@ -42,8 +44,71 @@ using Documents = std::vector<std::pair<not_null<DocumentData*>, FullMsgId>>;
 using Photos = std::vector<std::pair<not_null<PhotoData*>, FullMsgId>>;
 using BatchDownloads = BatchDownloadFiles;
 
+struct GroupedDocument {
+	not_null<DocumentData*> document;
+	std::vector<FullMsgId> origins;
+};
+
+using GroupedDocuments = std::vector<GroupedDocument>;
+
 constexpr auto kBatchDownloadsPref = "batch_download_files";
 constexpr auto kMaxBatchDownloads = 100000;
+constexpr auto kMaxBatchDownloadsPayloadSize = 64 * 1024 * 1024;
+constexpr auto kMaxBatchDownloadPathSize = 4096;
+constexpr auto kBatchDownloadsMagic = quint32(0x4244464C);
+constexpr auto kBatchDownloadsVersion = quint32(1);
+constexpr auto kBatchDownloadsHeaderSize = quint64(3 * sizeof(quint32));
+constexpr auto kBatchDownloadFileSize = quint64(
+	sizeof(quint64)
+	+ sizeof(qint64)
+	+ sizeof(quint32)
+	+ 2 * sizeof(quint8));
+constexpr auto kBatchDownloadMediaKeySize = quint64(2 * sizeof(quint64));
+
+struct BatchDownloadIdentity {
+	FullMsgId id;
+	std::optional<MediaKey> mediaKey;
+};
+
+std::optional<MediaKey> BatchDownloadMediaKey(
+		not_null<DocumentData*> document) {
+	return (document->isVideoFile() || document->isVideoMessage())
+		? std::make_optional(document->mediaKey())
+		: std::nullopt;
+}
+
+GroupedDocuments GroupVideoDocuments(Documents documents) {
+	auto result = GroupedDocuments();
+	result.reserve(documents.size());
+	auto mediaKeys = base::flat_map<
+		std::pair<Main::Session*, MediaKey>,
+		int>();
+	for (const auto &[document, origin] : documents) {
+		const auto mediaKey = BatchDownloadMediaKey(document);
+		if (mediaKey) {
+			const auto key = std::make_pair(&document->session(), *mediaKey);
+			const auto found = mediaKeys.find(key);
+			if (found != mediaKeys.end()) {
+				result[found->second].origins.push_back(origin);
+				continue;
+			}
+			mediaKeys.emplace(key, int(result.size()));
+		}
+		result.push_back({ document, { origin } });
+	}
+	return result;
+}
+
+bool HasBatchDownloadIdentity(
+		const BatchDownloads &downloads,
+		const BatchDownloadIdentity &identity) {
+	if (!identity.mediaKey) {
+		return downloads.contains(identity.id);
+	}
+	return ranges::any_of(downloads, [&](const auto &entry) {
+		return entry.second.mediaKey == identity.mediaKey;
+	});
+}
 
 BatchDownloads ReadBatchDownloads(not_null<Main::Session*> session) {
 	const auto serialized = session->local().readPref<QByteArray>(
@@ -51,71 +116,267 @@ BatchDownloads ReadBatchDownloads(not_null<Main::Session*> session) {
 	if (serialized.isEmpty()) {
 		return {};
 	}
+	if (serialized.size() > kMaxBatchDownloadsPayloadSize) {
+		return {};
+	}
 	auto stream = QDataStream(serialized);
 	stream.setVersion(QDataStream::Qt_5_1);
-	auto count = quint32();
-	stream >> count;
+	auto marker = quint32();
+	stream >> marker;
+	if (stream.status() != QDataStream::Ok) {
+		return {};
+	}
+	auto versioned = false;
+	auto count = marker;
+	if (marker == kBatchDownloadsMagic) {
+		auto version = quint32();
+		stream >> version >> count;
+		if (stream.status() != QDataStream::Ok
+			|| version != kBatchDownloadsVersion) {
+			return {};
+		}
+		versioned = true;
+	}
 	if (count > kMaxBatchDownloads) {
 		return {};
 	}
 	auto result = BatchDownloads();
 	result.reserve(count);
+	auto mediaKeys = base::flat_set<MediaKey>();
 	for (auto i = quint32(); i != count; ++i) {
 		auto peer = quint64();
 		auto message = qint64();
 		auto path = QString();
 		auto completed = quint8();
 		stream >> peer >> message >> path >> completed;
-		if (stream.status() != QDataStream::Ok) {
+		if (stream.status() != QDataStream::Ok
+			|| completed > 1
+			|| path.size() > kMaxBatchDownloadPathSize) {
 			return {};
 		}
-		if (completed) {
-			result.emplace(
-				FullMsgId(DeserializePeerId(peer), MsgId(message)),
-				std::move(path));
+		auto mediaKey = std::optional<MediaKey>();
+		if (versioned) {
+			auto hasMediaKey = quint8();
+			auto first = quint64();
+			auto second = quint64();
+			stream >> hasMediaKey;
+			if (hasMediaKey == 1) {
+				stream >> first >> second;
+				mediaKey = MediaKey(first, second);
+			} else if (hasMediaKey != 0) {
+				return {};
+			}
+			if (stream.status() != QDataStream::Ok
+				|| (mediaKey && !mediaKeys.emplace(*mediaKey).second)) {
+				return {};
+			}
 		}
+		const auto inserted = result.emplace(
+			FullMsgId(DeserializePeerId(peer), MsgId(message)),
+			BatchDownloadFile{
+				std::move(path),
+				(completed != 0),
+				mediaKey,
+			});
+		if (!inserted.second) {
+			return {};
+		}
+	}
+	return stream.atEnd() ? result : BatchDownloads();
+}
+
+std::optional<quint64> BatchDownloadFileSerializedSize(
+		const BatchDownloadFile &file) {
+	if (file.path.size() > kMaxBatchDownloadPathSize) {
+		return std::nullopt;
+	}
+	const auto pathLength = quint64(file.path.size());
+	if (pathLength > std::numeric_limits<quint64>::max() / sizeof(QChar)) {
+		return std::nullopt;
+	}
+	const auto pathSize = pathLength * sizeof(QChar);
+	const auto mediaKeySize = file.mediaKey
+		? kBatchDownloadMediaKeySize
+		: 0;
+	const auto fixedSize = kBatchDownloadFileSize + mediaKeySize;
+	if (pathSize > std::numeric_limits<quint64>::max() - fixedSize) {
+		return std::nullopt;
+	}
+	return fixedSize + pathSize;
+}
+
+std::optional<quint64> BatchDownloadsSerializedSize(
+		const BatchDownloads &downloads) {
+	auto result = kBatchDownloadsHeaderSize;
+	for (const auto &entry : downloads) {
+		const auto fileSize = BatchDownloadFileSerializedSize(entry.second);
+		if (!fileSize
+			|| *fileSize > std::numeric_limits<quint64>::max() - result) {
+			return std::nullopt;
+		}
+		result += *fileSize;
 	}
 	return result;
 }
 
-void WriteBatchDownloads(
+std::optional<QByteArray> SerializeBatchDownloads(
+		const BatchDownloads &downloads,
+		std::optional<quint64> knownSize = std::nullopt) {
+	if (downloads.size() > kMaxBatchDownloads) {
+		return std::nullopt;
+	}
+	const auto expectedSize = knownSize
+		? knownSize
+		: BatchDownloadsSerializedSize(downloads);
+	if (!expectedSize || *expectedSize > kMaxBatchDownloadsPayloadSize) {
+		return std::nullopt;
+	}
+	auto serialized = QByteArray();
+	serialized.reserve(int(*expectedSize));
+	auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
+	stream.setVersion(QDataStream::Qt_5_1);
+	stream
+		<< kBatchDownloadsMagic
+		<< kBatchDownloadsVersion
+		<< quint32(downloads.size());
+	for (const auto &[id, file] : downloads) {
+		stream
+			<< SerializePeerId(id.peer)
+			<< qint64(id.msg.bare)
+			<< file.path
+			<< quint8(file.completed ? 1 : 0)
+			<< quint8(file.mediaKey ? 1 : 0);
+		if (file.mediaKey) {
+			stream
+				<< quint64(file.mediaKey->first)
+				<< quint64(file.mediaKey->second);
+		}
+	}
+	if (stream.status() != QDataStream::Ok
+		|| quint64(serialized.size()) != *expectedSize) {
+		return std::nullopt;
+	}
+	return serialized;
+}
+
+bool WriteBatchDownloads(
 		not_null<Main::Session*> session,
 		const BatchDownloads &downloads) {
-	auto serialized = QByteArray();
-	{
-		auto stream = QDataStream(&serialized, QIODevice::WriteOnly);
-		stream.setVersion(QDataStream::Qt_5_1);
-		stream << quint32(downloads.size());
-		for (const auto &[id, path] : downloads) {
-			stream
-				<< SerializePeerId(id.peer)
-				<< qint64(id.msg.bare)
-				<< path
-				<< quint8(1);
-		}
+	auto serialized = SerializeBatchDownloads(downloads);
+	if (!serialized) {
+		return false;
 	}
 	session->local().writePref<QByteArray>(
 		kBatchDownloadsPref,
-		std::move(serialized));
+		std::move(*serialized));
+	return true;
 }
 
-void CompleteBatchDownloadFiles(
+bool EnsureBatchDownloadCapacity(
 		not_null<Main::Session*> session,
-		BatchDownloads completed) {
+		const std::vector<BatchDownloadIdentity> &identities) {
 	auto downloads = ReadBatchDownloads(session);
-	for (auto &[id, path] : completed) {
-		downloads[id] = std::move(path);
+	for (auto i = downloads.begin(); i != downloads.end();) {
+		if (i->second.completed && !QFileInfo::exists(i->second.path)) {
+			i = downloads.erase(i);
+		} else {
+			++i;
+		}
 	}
-	WriteBatchDownloads(session, downloads);
+	auto additional = 0;
+	auto addedIds = base::flat_set<FullMsgId>();
+	auto addedMediaKeys = base::flat_set<MediaKey>();
+	for (const auto &identity : identities) {
+		if (HasBatchDownloadIdentity(downloads, identity)) {
+			continue;
+		}
+		const auto added = identity.mediaKey
+			? addedMediaKeys.emplace(*identity.mediaKey).second
+			: addedIds.emplace(identity.id).second;
+		additional += added ? 1 : 0;
+	}
+	while (downloads.size() + additional > kMaxBatchDownloads) {
+		const auto completed = ranges::find_if(
+			downloads,
+			[](const auto &entry) { return entry.second.completed; });
+		if (completed == downloads.end()) {
+			return false;
+		}
+		downloads.erase(completed);
+	}
+	return true;
 }
 
-void CompleteBatchDownloadFile(
+bool UpdateBatchDownloadFiles(
+		not_null<Main::Session*> session,
+		BatchDownloads updates) {
+	auto downloads = ReadBatchDownloads(session);
+	for (auto &[id, file] : updates) {
+		if (file.mediaKey) {
+			for (auto i = downloads.begin(); i != downloads.end();) {
+				if (i->first != id && i->second.mediaKey == file.mediaKey) {
+					i = downloads.erase(i);
+				} else {
+					++i;
+				}
+			}
+		}
+		downloads[id] = std::move(file);
+	}
+	for (auto i = downloads.begin(); i != downloads.end();) {
+		if (i->second.completed && !QFileInfo::exists(i->second.path)) {
+			i = downloads.erase(i);
+		} else {
+			++i;
+		}
+	}
+	auto serializedSize = BatchDownloadsSerializedSize(downloads);
+	if (!serializedSize) {
+		return false;
+	}
+	auto count = downloads.size();
+	for (auto i = downloads.begin(); i != downloads.end();) {
+		if (count <= kMaxBatchDownloads
+			&& *serializedSize <= kMaxBatchDownloadsPayloadSize) {
+			break;
+		} else if (!i->second.completed) {
+			++i;
+			continue;
+		}
+		const auto fileSize = BatchDownloadFileSerializedSize(i->second);
+		if (!fileSize || *fileSize > *serializedSize) {
+			return false;
+		}
+		*serializedSize -= *fileSize;
+		--count;
+		i = downloads.erase(i);
+	}
+	if (count > kMaxBatchDownloads
+		|| *serializedSize > kMaxBatchDownloadsPayloadSize) {
+		return false;
+	}
+	auto serialized = SerializeBatchDownloads(downloads, serializedSize);
+	if (!serialized) {
+		return false;
+	}
+	session->local().writePref<QByteArray>(
+		kBatchDownloadsPref,
+		std::move(*serialized));
+	return true;
+}
+
+bool CompleteBatchDownloadFile(
 		not_null<Main::Session*> session,
 		FullMsgId id,
-		QString path) {
+		QString path,
+		std::optional<MediaKey> mediaKey) {
 	auto updates = BatchDownloads();
-	updates.emplace(id, std::move(path));
-	CompleteBatchDownloadFiles(session, std::move(updates));
+	updates.emplace(id, BatchDownloadFile{
+		std::move(path),
+		true,
+		mediaKey,
+	});
+	return UpdateBatchDownloadFiles(session, std::move(updates));
 }
 
 QString DefaultDownloadPath(not_null<Main::Session*> session) {
@@ -135,18 +396,46 @@ bool DocumentSavedToPath(
 		&& info.size() == document->size;
 }
 
-QString NumberedFilename(const QString &name, int index) {
-	if (index == 1) {
-		return name;
+struct ReservedDownloadPath {
+	QString path;
+	bool owned = false;
+};
+
+QString DownloadPathIdentity(const QString &path) {
+	const auto info = QFileInfo(path);
+	const auto canonical = info.canonicalFilePath();
+	return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
+
+ReservedDownloadPath ReserveDownloadPath(
+		const QString &name,
+		const QString &current,
+		const QString &folder) {
+	auto allowCurrent = !current.isEmpty();
+	while (true) {
+		const auto path = filedialogNextFilename(
+			name,
+			allowCurrent ? current : QString(),
+			folder);
+		if (path.isEmpty()) {
+			return {};
+		}
+		const auto info = QFileInfo(path);
+		const auto canonical = info.canonicalFilePath();
+		if (allowCurrent
+			&& info.exists()
+			&& !canonical.isEmpty()
+			&& canonical == QFileInfo(current).canonicalFilePath()) {
+			return { path, false };
+		}
+		auto file = QFile(path);
+		if (file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+			return { path, true };
+		} else if (!QFileInfo::exists(path)) {
+			return {};
+		}
+		allowCurrent = false;
 	}
-	const auto extensionIndex = name.lastIndexOf('.');
-	const auto prefix = (extensionIndex >= 0)
-		? name.mid(0, extensionIndex)
-		: name;
-	const auto extension = (extensionIndex >= 0)
-		? name.mid(extensionIndex)
-		: QString();
-	return prefix + u" (%1)"_q.arg(index) + extension;
 }
 
 [[nodiscard]] bool Added(
@@ -176,7 +465,8 @@ Fn<void()> PrepareDownloadAction(
 		Fn<void(not_null<Main::Session*>, FullMsgId, QString)> destination,
 		Fn<void(not_null<Main::Session*>, FullMsgId)> saved,
 		Fn<void(not_null<Main::Session*>, FullMsgId)> failed) {
-	const auto shouldShowToast = documents.empty();
+	const auto groupedDocuments = GroupVideoDocuments(std::move(documents));
+	const auto shouldShowToast = groupedDocuments.empty();
 	const auto trackBatchDownload = (destination || saved || failed);
 
 	const auto weak = base::make_weak(controller);
@@ -187,6 +477,34 @@ Fn<void()> PrepareDownloadAction(
 		}
 		if (const auto controller = weak.get()) {
 			controller->showToast(tr::ayu_MediaDownloadFailedToast(tr::now));
+		}
+	};
+	const auto reportDestinations = [=](
+			not_null<Main::Session*> owner,
+			const std::vector<FullMsgId> &origins,
+			const QString &path) {
+		if (destination) {
+			for (const auto &origin : origins) {
+				destination(owner, origin, path);
+			}
+		}
+	};
+	const auto reportSaved = [=](
+			not_null<Main::Session*> owner,
+			const std::vector<FullMsgId> &origins) {
+		if (saved) {
+			for (const auto &origin : origins) {
+				saved(owner, origin);
+			}
+		}
+	};
+	const auto reportFailed = [=](
+			not_null<Main::Session*> owner,
+			const std::vector<FullMsgId> &origins) {
+		if (failed) {
+			for (const auto &origin : origins) {
+				failed(owner, origin);
+			}
 		}
 	};
 	const auto saveImages = [=](const QString &folderPath) {
@@ -236,32 +554,109 @@ Fn<void()> PrepareDownloadAction(
 			base::weak_ptr<Main::Session> session;
 			std::shared_ptr<Data::PhotoMedia> view;
 			FullMsgId id;
+			QString name;
+			QString path;
+			bool pathOwned = false;
 			TimeId date = 0;
 		};
 		auto downloads = std::vector<PhotoDownload>();
-		for (const auto &[photo, fullId] : photos) {
+		auto pending = base::flat_map<Main::Session*, BatchDownloads>();
+		auto blocked = base::flat_set<Main::Session*>();
+		if (trackBatchDownload) {
+			auto ids = base::flat_map<
+				Main::Session*,
+				std::vector<BatchDownloadIdentity>>();
+			for (const auto &[photo, fullId] : photos) {
+				ids[&photo->session()].push_back({ fullId, std::nullopt });
+			}
+			for (const auto &[owner, list] : ids) {
+				if (!EnsureBatchDownloadCapacity(owner, list)) {
+					blocked.emplace(owner);
+				}
+			}
+		}
+		for (auto i = 0; i != int(photos.size()); ++i) {
+			const auto &[photo, fullId] = photos[i];
+			const auto owner = &photo->session();
+			if (blocked.contains(owner)) {
+				if (failed) {
+					failed(owner, fullId);
+				}
+				showFailure();
+				continue;
+			}
 			photo->clearFailed(Data::PhotoSize::Large);
 			if (const auto view = photo->createMediaView()) {
+				const auto name = u"photo_"_q
+					+ QString::number(i + 1)
+					+ u".jpg"_q;
+				auto destinationPath = ReservedDownloadPath();
+				if (trackBatchDownload) {
+					destinationPath = ReserveDownloadPath(
+						name,
+						QString(),
+						path);
+					if (destinationPath.path.isEmpty()) {
+						if (failed) {
+							failed(owner, fullId);
+						}
+						showFailure();
+						continue;
+					}
+					pending[owner][fullId] = {
+						destinationPath.path,
+						false,
+						std::nullopt,
+					};
+				}
 				const auto photoDate = photo->date();
-				const auto item = photo->session().data().message(fullId);
+				const auto item = owner->data().message(fullId);
 				downloads.push_back({
 					.photo = photo,
-					.session = base::make_weak(&photo->session()),
+					.session = base::make_weak(owner),
 					.view = view,
 					.id = fullId,
+					.name = name,
+					.path = destinationPath.path,
+					.pathOwned = destinationPath.owned,
 					.date = photoDate
 						? photoDate
 						: (item ? item->date() : TimeId(0)),
 				});
 			} else {
-				if (trackBatchDownload) {
-					ForgetBatchDownloadFile(&photo->session(), fullId);
-				}
 				if (failed) {
 					failed(&photo->session(), fullId);
 				}
 				showFailure();
 			}
+		}
+		auto rejected = base::flat_set<Main::Session*>();
+		for (auto &[owner, files] : pending) {
+			if (!UpdateBatchDownloadFiles(owner, std::move(files))) {
+				rejected.emplace(owner);
+			}
+		}
+		if (trackBatchDownload) {
+			auto accepted = std::vector<PhotoDownload>();
+			accepted.reserve(downloads.size());
+			for (auto &download : downloads) {
+				const auto owner = download.session.get();
+				if (!owner || rejected.contains(owner)) {
+					if (download.pathOwned) {
+						QFile::remove(download.path);
+					}
+					if (owner && failed) {
+						failed(owner, download.id);
+					}
+					showFailure();
+				} else {
+					if (destination) {
+						destination(owner, download.id, download.path);
+					}
+					accepted.push_back(std::move(download));
+				}
+			}
+			downloads = std::move(accepted);
 		}
 		const auto reportedFailures = std::make_shared<
 			base::flat_set<std::pair<Main::Session*, FullMsgId>>>();
@@ -271,9 +666,7 @@ Fn<void()> PrepareDownloadAction(
 				|| !reportedFailures->emplace(owner, download.id).second) {
 				return;
 			}
-			if (trackBatchDownload) {
-				ForgetBatchDownloadFile(owner, download.id);
-			}
+			QFile::remove(download.path);
 			if (failed) {
 				failed(owner, download.id);
 			}
@@ -306,6 +699,7 @@ Fn<void()> PrepareDownloadAction(
 				const auto &download = downloads[i];
 				const auto owner = download.session.get();
 				if (!owner) {
+					QFile::remove(download.path);
 					allSaved = false;
 					continue;
 				}
@@ -316,23 +710,22 @@ Fn<void()> PrepareDownloadAction(
 					} else {
 						failedResults.emplace_back(owner, download.id);
 					}
+					QFile::remove(download.path);
 					allSaved = false;
 					continue;
 				}
-				const auto name = u"photo_"_q
-					+ QString::number(i + 1)
-					+ u".jpg"_q;
-				const auto destinationPath = filedialogNextFilename(
-					name,
-					QString(),
-					path);
+				auto destinationPath = download.path;
 				if (destinationPath.isEmpty()) {
-					failedResults.emplace_back(owner, download.id);
-					allSaved = false;
-					continue;
-				}
-				if (destination) {
-					destination(owner, download.id, destinationPath);
+					const auto reserved = ReserveDownloadPath(
+						download.name,
+						QString(),
+						path);
+					destinationPath = reserved.path;
+					if (destinationPath.isEmpty()) {
+						failedResults.emplace_back(owner, download.id);
+						allSaved = false;
+						continue;
+					}
 				}
 				const auto savedToFile = download.view->saveToFile(
 					destinationPath);
@@ -349,7 +742,11 @@ Fn<void()> PrepareDownloadAction(
 					}
 				}
 				if (savedToFile && trackBatchDownload) {
-					completed[owner][download.id] = destinationPath;
+					completed[owner][download.id] = {
+						destinationPath,
+						true,
+						std::nullopt,
+					};
 					savedResults.emplace_back(owner, download.id);
 				} else if (!savedToFile) {
 					failedResults.emplace_back(owner, download.id);
@@ -362,7 +759,10 @@ Fn<void()> PrepareDownloadAction(
 				}
 			}
 			for (auto &[owner, files] : completed) {
-				CompleteBatchDownloadFiles(owner, std::move(files));
+				const auto updated = UpdateBatchDownloadFiles(
+					owner,
+					std::move(files));
+				Assert(updated);
 			}
 			if (saved) {
 				for (const auto &[owner, id] : savedResults) {
@@ -370,9 +770,6 @@ Fn<void()> PrepareDownloadAction(
 				}
 			}
 			for (const auto &[owner, id] : failedResults) {
-				if (trackBatchDownload) {
-					ForgetBatchDownloadFile(owner, id);
-				}
 				if (failed) {
 					failed(owner, id);
 				}
@@ -426,15 +823,126 @@ Fn<void()> PrepareDownloadAction(
 	};
 	const auto saveDocuments = [=](const QString &folderPath) {
 		if (folderPath.isEmpty()) {
-			for (const auto &[document, origin] : documents) {
-				DocumentSaveClickHandler::SaveAndTrack(origin, document);
+			for (const auto &entry : groupedDocuments) {
+				DocumentSaveClickHandler::SaveAndTrack(
+					entry.origins.front(),
+					entry.document);
 			}
 			return;
 		}
-		auto nameCounts = base::flat_map<QString, int>();
+		struct DocumentDownload {
+			not_null<DocumentData*> document;
+			not_null<Main::Session*> owner;
+			std::vector<FullMsgId> origins;
+			QString path;
+			std::optional<MediaKey> mediaKey;
+			bool pathOwned = false;
+		};
+		auto downloads = std::vector<DocumentDownload>();
+		auto pending = base::flat_map<Main::Session*, BatchDownloads>();
 		auto reservedPaths = base::flat_set<QString>();
-		for (const auto &[document, origin] : documents) {
+		auto blocked = base::flat_set<Main::Session*>();
+		auto existing = base::flat_map<Main::Session*, BatchDownloads>();
+		if (trackBatchDownload) {
+			auto ids = base::flat_map<
+				Main::Session*,
+				std::vector<BatchDownloadIdentity>>();
+			for (const auto &entry : groupedDocuments) {
+				const auto document = entry.document;
+				ids[&document->session()].push_back({
+					entry.origins.front(),
+					BatchDownloadMediaKey(document),
+				});
+			}
+			for (const auto &[owner, list] : ids) {
+				if (!EnsureBatchDownloadCapacity(owner, list)) {
+					blocked.emplace(owner);
+				}
+			}
+		}
+		for (const auto &entry : groupedDocuments) {
+			const auto document = entry.document;
+			const auto origins = entry.origins;
+			const auto origin = origins.front();
 			const auto owner = &document->session();
+			const auto mediaKey = BatchDownloadMediaKey(document);
+			if (blocked.contains(owner)) {
+				reportFailed(owner, origins);
+				showFailure();
+				continue;
+			}
+			if (trackBatchDownload && mediaKey && document->loading()) {
+				const auto files = existing.find(owner);
+				const auto &sessionFiles = (files != existing.end())
+					? files->second
+					: existing.emplace(
+						owner,
+						ReadBatchDownloads(owner)).first->second;
+				const auto active = ranges::find_if(
+					sessionFiles,
+					[&](const auto &entry) {
+						return !entry.second.completed
+							&& entry.second.mediaKey == mediaKey;
+					});
+				if (active != sessionFiles.end()) {
+					const auto activeId = active->first;
+					const auto loadingPath = document->loadingFilePath();
+					if (loadingPath.isEmpty()
+						|| active->second.path.isEmpty()
+						|| DownloadPathIdentity(active->second.path)
+							!= DownloadPathIdentity(loadingPath)) {
+						reportFailed(owner, origins);
+						showFailure();
+						continue;
+					}
+					const auto activePath = active->second.path;
+					const auto activeMediaKey = active->second.mediaKey;
+					reportDestinations(owner, origins, activePath);
+					auto lifetime = std::make_shared<rpl::lifetime>();
+					const auto finished = std::make_shared<bool>(false);
+					const auto weakOwner = base::make_weak(owner);
+					const auto finish = [=] {
+						if (document->loading()
+							|| std::exchange(*finished, true)) {
+							return;
+						}
+						if (const auto owner = weakOwner.get()) {
+							if (DocumentSavedToPath(document, activePath)) {
+								if (CompleteBatchDownloadFile(
+										owner,
+										activeId,
+										activePath,
+										activeMediaKey)) {
+									reportSaved(owner, origins);
+								} else {
+									reportFailed(owner, origins);
+									showFailure();
+								}
+							} else {
+								reportFailed(owner, origins);
+								showFailure();
+							}
+						}
+						lifetime->destroy();
+					};
+					document->owner().documentLoadProgress(
+					) | rpl::on_next_done([=](not_null<DocumentData*> changed) {
+						if (changed == document) {
+							finish();
+						}
+					}, [=] {
+						if (!std::exchange(*finished, true)) {
+							if (const auto owner = weakOwner.get()) {
+								reportFailed(owner, origins);
+								showFailure();
+							}
+						}
+						lifetime->destroy();
+					}, *lifetime);
+					finish();
+					continue;
+				}
+			}
 			const auto filename = QFileInfo(
 				document->filename()).fileName();
 			const auto safeFilename = (filename.isEmpty()
@@ -442,38 +950,81 @@ Fn<void()> PrepareDownloadAction(
 				|| filename == u".."_q)
 				? u"file"_q
 				: filename;
-			auto path = QString();
-			do {
-				const auto downloadName = NumberedFilename(
+			auto reserved = ReserveDownloadPath(
+				safeFilename,
+				document->filepath(true),
+				folderPath);
+			while (!reserved.path.isEmpty()
+				&& !reservedPaths.emplace(
+					DownloadPathIdentity(reserved.path)).second) {
+				reserved = ReserveDownloadPath(
 					safeFilename,
-					++nameCounts[safeFilename]);
-				path = filedialogNextFilename(
-					downloadName,
-					document->filepath(true),
+					QString(),
 					folderPath);
-			} while (!path.isEmpty()
-				&& !reservedPaths.emplace(path.toCaseFolded()).second);
-			if (path.isEmpty()) {
-				if (failed) {
-					failed(owner, origin);
-				}
+			}
+			if (reserved.path.isEmpty()) {
+				reportFailed(owner, origins);
 				showFailure();
 				continue;
 			}
-			if (destination) {
-				destination(owner, origin, path);
+			if (trackBatchDownload) {
+				pending[owner][origin] = {
+					reserved.path,
+					false,
+					mediaKey,
+				};
 			}
+			downloads.push_back({
+				document,
+				owner,
+				origins,
+				std::move(reserved.path),
+				mediaKey,
+				reserved.owned,
+			});
+		}
+		auto rejected = base::flat_set<Main::Session*>();
+		for (auto &[owner, files] : pending) {
+			if (!UpdateBatchDownloadFiles(owner, std::move(files))) {
+				rejected.emplace(owner);
+			}
+		}
+		if (trackBatchDownload) {
+			auto accepted = std::vector<DocumentDownload>();
+			accepted.reserve(downloads.size());
+			for (auto &download : downloads) {
+				if (rejected.contains(download.owner)) {
+					if (download.pathOwned) {
+						QFile::remove(download.path);
+					}
+					reportFailed(download.owner, download.origins);
+					showFailure();
+				} else {
+					reportDestinations(
+						download.owner,
+						download.origins,
+						download.path);
+					accepted.push_back(std::move(download));
+				}
+			}
+			downloads = std::move(accepted);
+		}
+		for (const auto &download : downloads) {
+			const auto document = download.document;
+			const auto owner = download.owner;
+			const auto &origins = download.origins;
+			const auto origin = origins.front();
+			const auto &path = download.path;
+			const auto mediaKey = download.mediaKey;
+			const auto pathOwned = download.pathOwned;
 			auto lifetime = std::make_shared<rpl::lifetime>();
 			const auto finished = std::make_shared<bool>(false);
 			const auto weakOwner = base::make_weak(owner);
 			const auto finishFailed = [=](not_null<Main::Session*> owner) {
-				QFile::remove(path);
-				if (trackBatchDownload) {
-					ForgetBatchDownloadFile(owner, origin);
-					if (failed) {
-						failed(owner, origin);
-					}
+				if (pathOwned) {
+					QFile::remove(path);
 				}
+				reportFailed(owner, origins);
 				showFailure();
 			};
 			const auto finish = [=] {
@@ -483,9 +1034,15 @@ Fn<void()> PrepareDownloadAction(
 				}
 				if (DocumentSavedToPath(document, path)) {
 					if (trackBatchDownload) {
-						CompleteBatchDownloadFile(owner, origin, path);
-						if (saved) {
-							saved(owner, origin);
+						const auto completed = CompleteBatchDownloadFile(
+							owner,
+							origin,
+							path,
+							mediaKey);
+						if (completed) {
+							reportSaved(owner, origins);
+						} else if (!completed) {
+							finishFailed(owner);
 						}
 					}
 				} else {
@@ -502,7 +1059,7 @@ Fn<void()> PrepareDownloadAction(
 				if (!std::exchange(*finished, true)) {
 					if (const auto owner = weakOwner.get()) {
 						finishFailed(owner);
-					} else {
+					} else if (pathOwned) {
 						QFile::remove(path);
 					}
 				}
@@ -592,11 +1149,74 @@ BatchDownloadFiles BatchDownloadFilesFor(
 	return ReadBatchDownloads(session);
 }
 
+bool MigrateBatchDownloadFileMediaKey(
+		not_null<Main::Session*> session,
+		FullMsgId id,
+		MediaKey mediaKey) {
+	return MigrateBatchDownloadFileMediaKeys(session, { { id, mediaKey } });
+}
+
+bool MigrateBatchDownloadFileMediaKeys(
+		not_null<Main::Session*> session,
+		const std::vector<std::pair<FullMsgId, MediaKey>> &migrations) {
+	if (migrations.empty()) {
+		return true;
+	}
+	auto downloads = ReadBatchDownloads(session);
+	for (const auto &migration : migrations) {
+		if (!downloads.contains(migration.first)) {
+			return false;
+		}
+	}
+	for (const auto &[id, mediaKey] : migrations) {
+		const auto legacy = downloads.find(id);
+		if (legacy == downloads.end()) {
+			if (ranges::none_of(downloads, [&](const auto &entry) {
+				return entry.second.mediaKey == mediaKey;
+			})) {
+				return false;
+			}
+			continue;
+		} else if (legacy->second.mediaKey == mediaKey) {
+			continue;
+		}
+		const auto canonical = ranges::find_if(
+			downloads,
+			[&](const auto &entry) {
+				return entry.first != id && entry.second.mediaKey == mediaKey;
+			});
+		if (canonical != downloads.end()) {
+			if (legacy->second.completed && !canonical->second.completed) {
+				legacy->second.mediaKey = mediaKey;
+				downloads.erase(canonical);
+			} else {
+				downloads.erase(legacy);
+			}
+		} else {
+			legacy->second.mediaKey = mediaKey;
+		}
+	}
+	return WriteBatchDownloads(session, downloads);
+}
+
 void ForgetBatchDownloadFile(
 		not_null<Main::Session*> session,
 		FullMsgId id) {
+	ForgetBatchDownloadFiles(session, { id });
+}
+
+void ForgetBatchDownloadFiles(
+		not_null<Main::Session*> session,
+		const std::vector<FullMsgId> &ids) {
+	if (ids.empty()) {
+		return;
+	}
 	auto downloads = ReadBatchDownloads(session);
-	if (downloads.remove(id)) {
+	auto changed = false;
+	for (const auto &id : ids) {
+		changed = downloads.remove(id) || changed;
+	}
+	if (changed) {
 		WriteBatchDownloads(session, downloads);
 	}
 }

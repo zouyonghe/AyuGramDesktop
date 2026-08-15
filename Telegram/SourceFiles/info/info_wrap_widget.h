@@ -75,6 +75,7 @@ struct SelectedItems {
 
 	Fn<Ui::StringWithNumbers(int)> title;
 	std::vector<SelectedItem> list;
+	bool active = false;
 };
 
 enum class SelectionAction {

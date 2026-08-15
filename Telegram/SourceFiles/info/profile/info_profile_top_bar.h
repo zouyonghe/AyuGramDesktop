@@ -279,6 +279,7 @@ private:
 	Ui::IconButton *_tabSelectionCancel = nullptr;
 	Ui::LabelWithNumbers *_tabSelectionText = nullptr;
 	Ui::IconButton *_tabSelectionForward = nullptr;
+	Ui::IconButton *_tabSelectionDownload = nullptr;
 	Ui::IconButton *_tabSelectionDelete = nullptr;
 	Ui::IconButton *_tabSelectionStoryInProfile = nullptr;
 	Ui::IconButton *_tabSelectionStoryPin = nullptr;

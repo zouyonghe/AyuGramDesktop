@@ -8625,10 +8625,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "ayu_AyuPreferences" = "AyuGram Preferences";
 "ayu_MediaBatchSelection" = "Batch selection";
-"ayu_MediaDownloadWaiting" = "Waiting";
-"ayu_MediaDownloadDownloading" = "Downloading";
-"ayu_MediaDownloadDownloaded" = "Downloaded";
-"ayu_MediaDownloadFailed" = "Failed";
 "ayu_MediaDownloadFailedToast" = "Some files could not be downloaded.";
 "ayu_DocsText" = "Documentation";
 "ayu_CategoryGeneral" = "General";

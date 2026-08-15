@@ -2145,7 +2145,7 @@ void TopBar::setupStandaloneGroupControl(
 }
 
 bool TopBar::tabSelectionMode() const {
-	return !_tabSelectedItems.list.empty();
+	return _tabSelectedItems.active || !_tabSelectedItems.list.empty();
 }
 
 void TopBar::setTabSelectedItems(SelectedItems &&items) {
@@ -2231,6 +2231,15 @@ void TopBar::createTabSelectionBar() {
 		forwardAction(SelectionAction::Forward);
 	}, _tabSelectionForward->lifetime());
 
+	_tabSelectionDownload = Ui::CreateChild<Ui::IconButton>(
+		inner,
+		_st.mediaDownload);
+	_tabSelectionDownload->setAccessibleName(tr::lng_media_download(tr::now));
+	_tabSelectionDownload->clicks(
+	) | rpl::on_next([=] {
+		forwardAction(SelectionAction::Download);
+	}, _tabSelectionDownload->lifetime());
+
 	_tabSelectionDelete = Ui::CreateChild<Ui::IconButton>(
 		inner,
 		_st.mediaDelete);
@@ -2272,14 +2281,16 @@ void TopBar::updateTabSelectionState() {
 	Expects(_tabSelectionBar != nullptr);
 
 	const auto &list = _tabSelectedItems.list;
-	const auto canDelete = ranges::all_of(list, &SelectedItem::canDelete);
-	const auto canForward = ranges::all_of(list, &SelectedItem::canForward);
-	const auto canToggleStoryPin = ranges::all_of(
-		list,
-		&SelectedItem::canToggleStoryPin);
-	const auto allInProfile = ranges::all_of(
-		list,
-		&SelectedItem::storyInProfile);
+	const auto canDelete = !list.empty()
+		&& ranges::all_of(list, &SelectedItem::canDelete);
+	const auto canForward = !list.empty()
+		&& ranges::all_of(list, &SelectedItem::canForward);
+	const auto canDownload = !list.empty()
+		&& ranges::all_of(list, &SelectedItem::canDownload);
+	const auto canToggleStoryPin = !list.empty()
+		&& ranges::all_of(list, &SelectedItem::canToggleStoryPin);
+	const auto allInProfile = !list.empty()
+		&& ranges::all_of(list, &SelectedItem::storyInProfile);
 	const auto canUnpin = ranges::any_of(
 		list,
 		&SelectedItem::canUnpinStory);
@@ -2287,6 +2298,7 @@ void TopBar::updateTabSelectionState() {
 		? _tabSelectedItems.title(int(list.size()))
 		: Ui::StringWithNumbers());
 	_tabSelectionForward->setVisible(canForward);
+	_tabSelectionDownload->setVisible(canDownload);
 	_tabSelectionDelete->setVisible(canDelete);
 	_tabSelectionStoryInProfile->setVisible(canToggleStoryPin);
 	_tabSelectionStoryInProfile->setIconOverride(
@@ -2331,6 +2343,10 @@ void TopBar::updateTabSelectionGeometry() {
 	if (!_tabSelectionStoryPin->isHidden()) {
 		_tabSelectionStoryPin->moveToRight(right, 0, inner->width());
 		right += _tabSelectionStoryPin->width();
+	}
+	if (!_tabSelectionDownload->isHidden()) {
+		_tabSelectionDownload->moveToRight(right, 0, inner->width());
+		right += _tabSelectionDownload->width();
 	}
 	if (!_tabSelectionForward->isHidden()) {
 		_tabSelectionForward->moveToRight(right, 0, inner->width());

@@ -82,7 +82,8 @@ ProfileTabsStrip {
 
 infoMediaHeaderFg: windowFg;
 infoMediaDownloadStatusFont: font(11px semibold);
-infoMediaDownloadStatusFg: windowFg;
+infoMediaDownloadStatusDownloadingFg: statisticsChartLineGolden;
+infoMediaDownloadStatusDownloadedFg: boxTextFgGood;
 infoMediaDownloadStatusFailedFg: boxTextFgError;
 infoMediaDownloadStatusBg: windowBgOver;
 infoMediaDownloadStatusPadding: margins(6px, 3px, 6px, 3px);

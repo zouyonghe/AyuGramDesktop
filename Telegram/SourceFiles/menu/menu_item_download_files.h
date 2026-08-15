@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_types.h"
+
 class HistoryInner;
 class HistoryItem;
 
@@ -29,13 +31,29 @@ class SessionController;
 
 namespace Menu {
 
-using BatchDownloadFiles = base::flat_map<FullMsgId, QString>;
+struct BatchDownloadFile {
+	QString path;
+	bool completed = false;
+	std::optional<MediaKey> mediaKey;
+};
+
+using BatchDownloadFiles = base::flat_map<FullMsgId, BatchDownloadFile>;
 
 [[nodiscard]] BatchDownloadFiles BatchDownloadFilesFor(
 	not_null<Main::Session*> session);
+[[nodiscard]] bool MigrateBatchDownloadFileMediaKey(
+	not_null<Main::Session*> session,
+	FullMsgId id,
+	MediaKey mediaKey);
+[[nodiscard]] bool MigrateBatchDownloadFileMediaKeys(
+	not_null<Main::Session*> session,
+	const std::vector<std::pair<FullMsgId, MediaKey>> &migrations);
 void ForgetBatchDownloadFile(
 	not_null<Main::Session*> session,
 	FullMsgId id);
+void ForgetBatchDownloadFiles(
+	not_null<Main::Session*> session,
+	const std::vector<FullMsgId> &ids);
 
 [[nodiscard]] bool DownloadSelectedFiles(
 	not_null<Window::SessionController*> window,

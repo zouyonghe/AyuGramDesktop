@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_widget.h"
 #include "info/media/info_media_common.h"
 #include "overview/overview_layout_delegate.h"
+#include "data/data_types.h"
 
 class DeleteMessagesBox;
 
@@ -134,6 +135,12 @@ private:
 		Downloaded,
 		Failed,
 	};
+	struct BatchDownloadData {
+		BatchDownloadState state = BatchDownloadState::Failed;
+		QString path;
+		DocumentData *document = nullptr;
+	};
+	using BatchDownloadMediaId = std::pair<Main::Session*, MediaKey>;
 	using Section = ListSection;
 	using FoundItem = ListFoundItem;
 	using CursorState = HistoryView::CursorState;
@@ -236,6 +243,18 @@ private:
 		const SelectedItems &items) const;
 	[[nodiscard]] bool canDownloadItem(
 		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] std::optional<BatchDownloadMediaId>
+		batchDownloadMediaId(not_null<const HistoryItem*> item) const;
+	void registerBatchDownloadMediaItem(
+		not_null<const HistoryItem*> item,
+		const BatchDownloadMediaId &id);
+	void unregisterBatchDownloadMediaItem(
+		not_null<const HistoryItem*> item);
+	[[nodiscard]] const BatchDownloadData *batchDownloadData(
+		not_null<const HistoryItem*> item) const;
+	BatchDownloadData &ensureBatchDownloadData(
+		not_null<const HistoryItem*> item);
+	void repaintDownloadState(not_null<const HistoryItem*> item);
 	void pushSelectedItems();
 	[[nodiscard]] bool hasSelected() const;
 	[[nodiscard]] bool isSelectedItem(
@@ -248,6 +267,7 @@ private:
 	void forwardSelected();
 	void downloadSelected();
 	void restoreDownloadStates();
+	void updateDownloadProgress();
 	void refreshDownloadStates();
 	void paintDownloadStates(Painter &p, QRect clip);
 	void forwardItem(GlobalMsgId globalId);
@@ -385,10 +405,19 @@ private:
 	bool _batchSelectionEnabled = false;
 	SelectedMap _selected;
 	SelectedMap _dragSelected;
-	base::flat_map<not_null<const HistoryItem*>, BatchDownloadState>
-		_batchDownloadStates;
-	base::flat_map<not_null<const HistoryItem*>, QString> _batchDownloadPaths;
+	base::flat_map<not_null<const HistoryItem*>, BatchDownloadData>
+		_batchDownloadItems;
+	base::flat_map<BatchDownloadMediaId, BatchDownloadData>
+		_batchDownloadMedia;
+	base::flat_map<
+		BatchDownloadMediaId,
+		base::flat_set<not_null<const HistoryItem*>>>
+		_batchDownloadMediaItems;
+	base::flat_map<not_null<const HistoryItem*>, BatchDownloadMediaId>
+		_batchDownloadItemMediaIds;
+	base::flat_set<GlobalMsgId> _batchDownloadMediaKeyMigrations;
 	base::Timer _batchDownloadTimer;
+	bool _batchDownloadStarting = false;
 	rpl::event_stream<SelectedItems> _selectedListStream;
 	style::cursor _cursor = style::cur_default;
 	DragSelectAction _dragSelectAction = DragSelectAction::None;

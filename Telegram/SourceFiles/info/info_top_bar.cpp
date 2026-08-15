@@ -841,15 +841,18 @@ void TopBar::createSelectionControls() {
 }
 
 bool TopBar::computeCanDelete() const {
-	return ranges::all_of(_selectedItems.list, &SelectedItem::canDelete);
+	return !_selectedItems.list.empty()
+		&& ranges::all_of(_selectedItems.list, &SelectedItem::canDelete);
 }
 
 bool TopBar::computeCanForward() const {
-	return ranges::all_of(_selectedItems.list, &SelectedItem::canForward);
+	return !_selectedItems.list.empty()
+		&& ranges::all_of(_selectedItems.list, &SelectedItem::canForward);
 }
 
 bool TopBar::computeCanDownload() const {
-	return ranges::all_of(_selectedItems.list, &SelectedItem::canDownload);
+	return !_selectedItems.list.empty()
+		&& ranges::all_of(_selectedItems.list, &SelectedItem::canDownload);
 }
 
 bool TopBar::computeCanUnpinStories() const {
@@ -857,15 +860,17 @@ bool TopBar::computeCanUnpinStories() const {
 }
 
 bool TopBar::computeCanToggleStoryPin() const {
-	return ranges::all_of(
-		_selectedItems.list,
-		&SelectedItem::canToggleStoryPin);
+	return !_selectedItems.list.empty()
+		&& ranges::all_of(
+			_selectedItems.list,
+			&SelectedItem::canToggleStoryPin);
 }
 
 bool TopBar::computeAllStoriesInProfile() const {
-	return ranges::all_of(
-		_selectedItems.list,
-		&SelectedItem::storyInProfile);
+	return !_selectedItems.list.empty()
+		&& ranges::all_of(
+			_selectedItems.list,
+			&SelectedItem::storyInProfile);
 }
 
 Ui::StringWithNumbers TopBar::generateSelectedText() const {
@@ -873,7 +878,7 @@ Ui::StringWithNumbers TopBar::generateSelectedText() const {
 }
 
 bool TopBar::selectionMode() const {
-	return !_selectedItems.list.empty();
+	return _selectedItems.active || !_selectedItems.list.empty();
 }
 
 bool TopBar::storiesTitle() const {

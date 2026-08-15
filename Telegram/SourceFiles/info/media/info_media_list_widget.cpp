@@ -167,7 +167,7 @@ ListWidget::ListWidget(
 , _controller(controller)
 , _provider(MakeProvider(_controller))
 , _rowsScrollCache([=] { update(); })
-, _batchDownloadTimer([=] { refreshDownloadStates(); })
+, _batchDownloadTimer([=] { updateDownloadProgress(); })
 , _dateBadge(std::make_unique<DateBadge>(
 		_provider->type(),
 		[=] { scrollDateCheck(); },
@@ -277,14 +277,18 @@ void ListWidget::subscribeToSession(
 
 	session->data().itemRepaintRequest(
 	) | rpl::on_next([this](auto item) {
-		if (_batchDownloadStates.contains(item)) {
-			refreshDownloadStates();
-		}
 		repaintItem(item);
 	}, lifetime);
 
 	session->data().itemDataChanges(
 	) | rpl::on_next([=](not_null<HistoryItem*> item) {
+		if (_batchDownloadItemMediaIds.contains(item)) {
+			if (const auto id = batchDownloadMediaId(item)) {
+				registerBatchDownloadMediaItem(item, *id);
+			} else {
+				unregisterBatchDownloadMediaItem(item);
+			}
+		}
 		if (const auto found = findItemByItem(item)) {
 			found->layout->itemDataChanged();
 		}
@@ -294,9 +298,14 @@ void ListWidget::subscribeToSession(
 void ListWidget::setupSelectRestriction() {
 	_provider->hasSelectRestrictionChanges(
 	) | rpl::filter([=] {
-		return _provider->hasSelectRestriction() && hasSelectedItems();
+		return _provider->hasSelectRestriction()
+			&& (hasSelectedItems() || _batchSelectionEnabled);
 	}) | rpl::on_next([=] {
-		clearSelected();
+		if (_batchSelectionEnabled) {
+			setBatchSelectionEnabled(false);
+		} else {
+			clearSelected();
+		}
 		if (_mouseAction == MouseAction::PrepareSelect) {
 			mouseActionCancel();
 		}
@@ -377,7 +386,13 @@ rpl::producer<SelectedItems> ListWidget::selectedListValue() const {
 
 void ListWidget::selectionAction(SelectionAction action) {
 	switch (action) {
-	case SelectionAction::Clear: clearSelected(); return;
+	case SelectionAction::Clear:
+		if (_batchSelectionEnabled) {
+			setBatchSelectionEnabled(false);
+		} else {
+			clearSelected();
+		}
+		return;
 	case SelectionAction::Forward: forwardSelected(); return;
 	case SelectionAction::Download: downloadSelected(); return;
 	case SelectionAction::Delete: deleteSelected(); return;
@@ -396,9 +411,15 @@ void ListWidget::setBatchSelectionEnabled(bool enabled) {
 		return;
 	}
 	_batchSelectionEnabled = enabled;
-	if (!enabled) {
+	if (!enabled && !_selected.empty()) {
+		const auto selectedItems = hasSelectedItems();
 		clearSelected();
+		if (selectedItems) {
+			return;
+		}
 	}
+	pushSelectedItems();
+	update();
 }
 
 void ListWidget::setReorderDescriptor(ReorderDescriptor descriptor) {
@@ -436,6 +457,8 @@ void ListWidget::restart() {
 }
 
 void ListWidget::itemRemoved(not_null<const HistoryItem*> item) {
+	_batchDownloadItems.remove(item);
+	unregisterBatchDownloadMediaItem(item);
 	if (!_provider->isMyItem(item)) {
 		return;
 	}
@@ -475,9 +498,6 @@ void ListWidget::itemRemoved(not_null<const HistoryItem*> item) {
 	if (const auto i = _selected.find(item); i != _selected.cend()) {
 		removeItemSelection(i);
 	}
-	_batchDownloadStates.remove(item);
-	_batchDownloadPaths.remove(item);
-
 	if (needHeightRefresh) {
 		refreshHeight();
 	}
@@ -501,6 +521,7 @@ auto ListWidget::collectSelectedItems() const -> SelectedItems {
 		return convert(item.first, item.second);
 	};
 	auto items = SelectedItems(_provider->type());
+	items.active = _batchSelectionEnabled || hasSelectedItems();
 	if (_provider->type() == Type::PhotoVideo
 		&& !_controller->storiesPeer()) {
 		items.title = [](int count) {
@@ -531,10 +552,10 @@ auto ListWidget::collectSelectedItems() const -> SelectedItems {
 bool ListWidget::canDownloadItem(
 		not_null<const HistoryItem*> item) const {
 	const auto media = item->media();
-	const auto state = _batchDownloadStates.find(item);
-	const auto downloading = (state != _batchDownloadStates.end())
-		&& ((state->second == BatchDownloadState::Waiting)
-			|| (state->second == BatchDownloadState::Downloading));
+	const auto data = batchDownloadData(item);
+	const auto downloading = data
+		&& ((data->state == BatchDownloadState::Waiting)
+			|| (data->state == BatchDownloadState::Downloading));
 	return !downloading
 		&& !item->forbidsForward()
 		&& media
@@ -542,6 +563,95 @@ bool ListWidget::canDownloadItem(
 		&& ((_provider->type() == Type::Photo)
 			|| (_provider->type() == Type::Video)
 			|| (_provider->type() == Type::PhotoVideo));
+}
+
+std::optional<ListWidget::BatchDownloadMediaId>
+ListWidget::batchDownloadMediaId(
+		not_null<const HistoryItem*> item) const {
+	const auto media = item->media();
+	const auto document = media ? media->document() : nullptr;
+	return document
+		&& (document->isVideoFile() || document->isVideoMessage())
+		? std::make_optional(std::make_pair(
+			&item->history()->session(),
+			document->mediaKey()))
+		: std::nullopt;
+}
+
+void ListWidget::registerBatchDownloadMediaItem(
+		not_null<const HistoryItem*> item,
+		const BatchDownloadMediaId &id) {
+	const auto existing = _batchDownloadItemMediaIds.find(item);
+	if (existing != _batchDownloadItemMediaIds.end()
+		&& existing->second != id) {
+		if (const auto aliases = _batchDownloadMediaItems.find(
+				existing->second);
+			aliases != _batchDownloadMediaItems.end()) {
+			aliases->second.remove(item);
+			if (aliases->second.empty()) {
+				_batchDownloadMediaItems.erase(aliases);
+			}
+		}
+		existing->second = id;
+	} else if (existing == _batchDownloadItemMediaIds.end()) {
+		_batchDownloadItemMediaIds.emplace(item, id);
+	}
+	_batchDownloadMediaItems[id].emplace(item);
+}
+
+void ListWidget::unregisterBatchDownloadMediaItem(
+		not_null<const HistoryItem*> item) {
+	const auto existing = _batchDownloadItemMediaIds.find(item);
+	if (existing == _batchDownloadItemMediaIds.end()) {
+		return;
+	}
+	const auto id = existing->second;
+	_batchDownloadItemMediaIds.erase(existing);
+	if (const auto aliases = _batchDownloadMediaItems.find(id);
+		aliases != _batchDownloadMediaItems.end()) {
+		aliases->second.remove(item);
+		if (aliases->second.empty()) {
+			_batchDownloadMediaItems.erase(aliases);
+		}
+	}
+}
+
+const ListWidget::BatchDownloadData *ListWidget::batchDownloadData(
+		not_null<const HistoryItem*> item) const {
+	if (const auto id = batchDownloadMediaId(item)) {
+		const auto i = _batchDownloadMedia.find(*id);
+		return (i != _batchDownloadMedia.end()) ? &i->second : nullptr;
+	}
+	const auto i = _batchDownloadItems.find(item);
+	return (i != _batchDownloadItems.end()) ? &i->second : nullptr;
+}
+
+ListWidget::BatchDownloadData &ListWidget::ensureBatchDownloadData(
+		not_null<const HistoryItem*> item) {
+	if (const auto id = batchDownloadMediaId(item)) {
+		auto &result = _batchDownloadMedia[*id];
+		const auto document = item->media()->document();
+		if (!result.document || document->loading()) {
+			result.document = document;
+		}
+		registerBatchDownloadMediaItem(item, *id);
+		return result;
+	}
+	return _batchDownloadItems[item];
+}
+
+void ListWidget::repaintDownloadState(
+		not_null<const HistoryItem*> item) {
+	if (const auto id = batchDownloadMediaId(item)) {
+		if (const auto i = _batchDownloadMediaItems.find(*id);
+			i != _batchDownloadMediaItems.end()) {
+			for (const auto alias : i->second) {
+				repaintItem(alias);
+			}
+			return;
+		}
+	}
+	repaintItem(item);
 }
 
 MessageIdsList ListWidget::collectSelectedIds() const {
@@ -782,30 +892,221 @@ void ListWidget::refreshRows() {
 }
 
 void ListWidget::restoreDownloadStates() {
+	const auto isActive = [](const BatchDownloadData &data) {
+		return data.state == BatchDownloadState::Waiting
+			|| data.state == BatchDownloadState::Downloading;
+	};
+	for (auto i = _batchDownloadItems.begin();
+		i != _batchDownloadItems.end();) {
+		if (isActive(i->second)) {
+			++i;
+		} else {
+			i = _batchDownloadItems.erase(i);
+		}
+	}
+	for (auto i = _batchDownloadMedia.begin();
+		i != _batchDownloadMedia.end();) {
+		if (isActive(i->second)) {
+			++i;
+		} else {
+			i = _batchDownloadMedia.erase(i);
+		}
+	}
+	struct RestoredMediaFile {
+		FullMsgId id;
+		Menu::BatchDownloadFile file;
+	};
+	struct RestoredMediaState {
+		std::optional<RestoredMediaFile> completed;
+		std::optional<RestoredMediaFile> incomplete;
+	};
 	auto files = base::flat_map<Main::Session*, Menu::BatchDownloadFiles>();
+	auto mediaDocuments = base::flat_map<
+		BatchDownloadMediaId,
+		DocumentData*>();
+	auto restoredMedia = base::flat_map<
+		BatchDownloadMediaId,
+		RestoredMediaState>();
+	struct PendingMigration {
+		GlobalMsgId cacheId;
+		FullMsgId id;
+		MediaKey mediaKey;
+	};
+	auto forgotten = base::flat_map<
+		Main::Session*,
+		std::vector<FullMsgId>>();
+	auto migrations = base::flat_map<
+		Main::Session*,
+		std::vector<PendingMigration>>();
+	auto active = false;
+	_batchDownloadMediaItems.clear();
+	_batchDownloadItemMediaIds.clear();
 	for (const auto &section : _sections) {
 		for (const auto &entry : section.items()) {
 			const auto item = entry->getItem();
 			const auto owner = &item->history()->session();
-			const auto filesIt = files.find(owner);
-			const auto &sessionFiles = (filesIt != files.end())
-				? filesIt->second
-				: files.emplace(
-					owner,
-					Menu::BatchDownloadFilesFor(owner)).first->second;
+			if (!files.contains(owner)) {
+				files.emplace(owner, Menu::BatchDownloadFilesFor(owner));
+			}
+			if (const auto id = batchDownloadMediaId(item)) {
+				registerBatchDownloadMediaItem(item, *id);
+				const auto document = item->media()->document();
+				auto &shared = mediaDocuments[*id];
+				if (!shared || document->loading()) {
+					shared = document;
+				}
+			}
+		}
+	}
+	const auto addMediaFile = [&](
+			const BatchDownloadMediaId &mediaId,
+			FullMsgId id,
+			const Menu::BatchDownloadFile &file) {
+		auto &state = restoredMedia[mediaId];
+		auto &slot = file.completed ? state.completed : state.incomplete;
+		if (!slot || id < slot->id) {
+			slot = RestoredMediaFile{ id, file };
+		}
+	};
+	for (const auto &[owner, sessionFiles] : files) {
+		for (const auto &[id, file] : sessionFiles) {
+			if (!file.mediaKey) {
+				continue;
+			}
+			const auto mediaId = BatchDownloadMediaId(owner, *file.mediaKey);
+			if (file.completed && !QFileInfo::exists(file.path)) {
+				forgotten[owner].push_back(id);
+				continue;
+			}
+			addMediaFile(mediaId, id, file);
+		}
+	}
+	const auto applyRestored = [&](
+			BatchDownloadData &data,
+			const Menu::BatchDownloadFile &file,
+			DocumentData *document,
+			bool loading) {
+		if (!data.document || (document && document->loading())) {
+			data.document = document;
+		}
+		if (loading) {
+			data.state = BatchDownloadState::Downloading;
+		} else if (!isActive(data)) {
+			data.state = file.completed
+				? BatchDownloadState::Downloaded
+				: BatchDownloadState::Failed;
+			data.path = file.path;
+		}
+		if (data.path.isEmpty()) {
+			data.path = file.path;
+		}
+		active = active || isActive(data);
+	};
+	for (const auto &section : _sections) {
+		for (const auto &entry : section.items()) {
+			const auto item = entry->getItem();
+			const auto owner = &item->history()->session();
+			const auto &sessionFiles = files.find(owner)->second;
 			const auto file = sessionFiles.find(item->fullId());
 			if (file == sessionFiles.end()) {
 				continue;
 			}
-			if (!_batchDownloadStates.contains(item)) {
-				if (QFileInfo::exists(file->second)) {
-					_batchDownloadStates[item] = BatchDownloadState::Downloaded;
-					_batchDownloadPaths[item] = file->second;
-				} else {
-					Menu::ForgetBatchDownloadFile(owner, item->fullId());
+			if (!file->second.mediaKey) {
+				const auto media = item->media();
+				const auto photo = media ? media->photo() : nullptr;
+				const auto document = media ? media->document() : nullptr;
+				const auto loading = document
+					? document->loading()
+					: photo
+					? photo->loading()
+					: false;
+				if (file->second.completed
+					&& !QFileInfo::exists(file->second.path)) {
+					forgotten[owner].push_back(item->fullId());
+					continue;
+				}
+				applyRestored(
+					_batchDownloadItems[item],
+					file->second,
+					document,
+					loading);
+				if (const auto mediaId = batchDownloadMediaId(item)) {
+					const auto migrationId = item->globalId();
+					if (!_batchDownloadMediaKeyMigrations.contains(migrationId)) {
+						migrations[owner].push_back({
+							migrationId,
+							item->fullId(),
+							mediaId->second,
+						});
+					}
+					addMediaFile(*mediaId, item->fullId(), file->second);
 				}
 			}
 		}
+	}
+	for (const auto &[owner, entries] : migrations) {
+		auto updates = std::vector<std::pair<FullMsgId, MediaKey>>();
+		updates.reserve(entries.size());
+		for (const auto &entry : entries) {
+			updates.emplace_back(entry.id, entry.mediaKey);
+		}
+		if (Menu::MigrateBatchDownloadFileMediaKeys(owner, updates)) {
+			for (const auto &entry : entries) {
+				_batchDownloadMediaKeyMigrations.emplace(entry.cacheId);
+			}
+		}
+	}
+	for (const auto &[owner, ids] : forgotten) {
+		Menu::ForgetBatchDownloadFiles(owner, ids);
+	}
+	for (const auto &[id, restored] : restoredMedia) {
+		const auto completed = restored.completed
+			? &*restored.completed
+			: nullptr;
+		const auto incomplete = restored.incomplete
+			? &*restored.incomplete
+			: nullptr;
+		const auto selected = completed ? completed : incomplete;
+		if (!selected) {
+			continue;
+		}
+		const auto found = mediaDocuments.find(id);
+		const auto document = (found != mediaDocuments.end())
+			? found->second
+			: nullptr;
+		applyRestored(
+			_batchDownloadMedia[id],
+			selected->file,
+			document,
+			document && document->loading());
+	}
+	for (auto &[id, data] : _batchDownloadMedia) {
+		if (const auto document = mediaDocuments.find(id);
+			document != mediaDocuments.end()
+			&& (!data.document || document->second->loading())) {
+			data.document = document->second;
+		}
+		if (data.document && data.document->loading()) {
+			data.state = BatchDownloadState::Downloading;
+		}
+		active = active || isActive(data);
+	}
+	for (auto &[item, data] : _batchDownloadItems) {
+		const auto media = item->media();
+		const auto document = media ? media->document() : nullptr;
+		const auto photo = media ? media->photo() : nullptr;
+		const auto loading = document
+			? document->loading()
+			: photo
+			? photo->loading()
+			: false;
+		if (loading) {
+			data.state = BatchDownloadState::Downloading;
+		}
+		active = active || isActive(data);
+	}
+	if (active) {
+		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
 	}
 }
 
@@ -1129,7 +1430,9 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 	const auto window = _controller->parentController();
 	const auto paused = window->isGifPausedAtLeastFor(
 		Window::GifPauseReason::Layer);
-	const auto selecting = hasSelectedItems() || _storiesAddToAlbumId;
+	const auto selecting = _batchSelectionEnabled
+		|| hasSelectedItems()
+		|| _storiesAddToAlbumId;
 	const auto paintContext = Overview::Layout::PaintContext(ms, selecting, paused);
 	auto context = ListContext{
 		paintContext,
@@ -1580,36 +1883,40 @@ void ListWidget::forwardSelected() {
 void ListWidget::downloadSelected() {
 	struct PreviousDownloadState {
 		not_null<const HistoryItem*> item;
-		std::optional<BatchDownloadState> state;
-		std::optional<QString> path;
+		std::optional<BatchDownloadMediaId> mediaId;
+		std::optional<BatchDownloadData> data;
 	};
 	auto items = std::vector<not_null<HistoryItem*>>();
 	auto previous = std::vector<PreviousDownloadState>();
 	items.reserve(_selected.size());
-	previous.reserve(_selected.size());
 	for (const auto &[item, selection] : _selected) {
 		if (selection.text != FullSelection || !canDownloadItem(item)) {
 			continue;
 		}
-		auto mutableItem = const_cast<HistoryItem*>(item.get());
-		items.emplace_back(mutableItem);
-		const auto state = _batchDownloadStates.find(item);
-		const auto path = _batchDownloadPaths.find(item);
-		previous.push_back({
-			.item = item,
-			.state = (state != _batchDownloadStates.end())
-				? std::make_optional(state->second)
-				: std::nullopt,
-			.path = (path != _batchDownloadPaths.end())
-				? std::make_optional(path->second)
-				: std::nullopt,
-		});
-		_batchDownloadStates[item] = BatchDownloadState::Waiting;
+		items.emplace_back(const_cast<HistoryItem*>(item.get()));
 	}
 	if (items.empty()) {
 		return;
 	}
+	previous.reserve(items.size());
+	auto mediaSnapshots = base::flat_set<BatchDownloadMediaId>();
+	for (const auto item : items) {
+		const auto mediaId = batchDownloadMediaId(item);
+		const auto data = batchDownloadData(item);
+		if (!mediaId || mediaSnapshots.emplace(*mediaId).second) {
+			previous.push_back({
+				.item = item,
+				.mediaId = mediaId,
+				.data = data
+					? std::make_optional(*data)
+					: std::nullopt,
+			});
+		}
+		ensureBatchDownloadData(item).state = BatchDownloadState::Waiting;
+		repaintDownloadState(item);
+	}
 	const auto weak = base::make_weak(this);
+	_batchDownloadStarting = true;
 	const auto started = Menu::DownloadSelectedFiles(
 		_controller->parentController(),
 		items,
@@ -1624,7 +1931,7 @@ void ListWidget::downloadSelected() {
 				return;
 			}
 			if (const auto item = session->data().message(id)) {
-				strong->_batchDownloadPaths[item] = std::move(path);
+				strong->ensureBatchDownloadData(item).path = std::move(path);
 			}
 		},
 		[weak = base::make_weak(this)](
@@ -1635,59 +1942,76 @@ void ListWidget::downloadSelected() {
 				return;
 			}
 			if (const auto item = session->data().message(id)) {
-				const auto i = strong->_batchDownloadStates.find(item);
-				if (i != strong->_batchDownloadStates.end()) {
-					i->second = BatchDownloadState::Downloaded;
-					strong->repaintItem(item);
+				strong->ensureBatchDownloadData(item).state
+					= BatchDownloadState::Downloaded;
+				strong->repaintDownloadState(item);
+				strong->pushSelectedItems();
+			}
+		},
+		[weak = base::make_weak(this)](
+				not_null<Main::Session*> session,
+				FullMsgId id) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (const auto item = session->data().message(id)) {
+				auto &data = strong->ensureBatchDownloadData(item);
+				if (data.state != BatchDownloadState::Downloaded) {
+					data.state = BatchDownloadState::Failed;
+					data.path = QString();
+					strong->repaintDownloadState(item);
 					strong->pushSelectedItems();
 				}
-			}
-		},
-		[weak = base::make_weak(this)](
-				not_null<Main::Session*> session,
-				FullMsgId id) {
-			const auto strong = weak.get();
-			if (!strong) {
-				return;
-			}
-			if (const auto item = session->data().message(id)) {
-				strong->_batchDownloadStates[item]
-					= BatchDownloadState::Failed;
-				strong->_batchDownloadPaths.remove(item);
-				strong->repaintItem(item);
-				strong->pushSelectedItems();
 			}
 		});
 	const auto strong = weak.get();
 	if (!strong) {
 		return;
 	}
+	strong->_batchDownloadStarting = false;
 	if (!started) {
 		for (const auto &entry : previous) {
-			if (entry.state) {
-				strong->_batchDownloadStates[entry.item] = *entry.state;
+			if (entry.mediaId) {
+				if (entry.data) {
+					strong->_batchDownloadMedia[*entry.mediaId] = *entry.data;
+				} else {
+					strong->_batchDownloadMedia.remove(*entry.mediaId);
+				}
+				if (const auto aliases = strong->_batchDownloadMediaItems.find(
+						*entry.mediaId);
+					aliases != strong->_batchDownloadMediaItems.end()) {
+					for (const auto alias : aliases->second) {
+						strong->repaintItem(alias);
+					}
+				}
+			} else if (entry.data) {
+				strong->_batchDownloadItems[entry.item] = *entry.data;
 			} else {
-				strong->_batchDownloadStates.remove(entry.item);
+				strong->_batchDownloadItems.remove(entry.item);
 			}
-			if (entry.path) {
-				strong->_batchDownloadPaths[entry.item] = *entry.path;
-			} else {
-				strong->_batchDownloadPaths.remove(entry.item);
+			if (!entry.mediaId) {
+				strong->repaintItem(entry.item);
 			}
-			strong->repaintItem(entry.item);
 		}
 		strong->pushSelectedItems();
 		return;
 	}
-	strong->pushSelectedItems();
-	strong->update();
-	strong->_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
+	strong->clearSelected();
+	strong->updateDownloadProgress();
 }
 
-void ListWidget::refreshDownloadStates() {
+void ListWidget::updateDownloadProgress() {
+	const auto isTracked = [](const BatchDownloadData &data) {
+		return data.state == BatchDownloadState::Waiting
+			|| data.state == BatchDownloadState::Downloading;
+	};
 	auto active = false;
-	auto stale = std::vector<not_null<const HistoryItem*>>();
-	for (auto &[item, state] : _batchDownloadStates) {
+	auto inactive = false;
+	for (auto &[item, data] : _batchDownloadItems) {
+		if (!isTracked(data)) {
+			continue;
+		}
 		const auto media = item->media();
 		const auto photo = media ? media->photo() : nullptr;
 		const auto document = media ? media->document() : nullptr;
@@ -1696,33 +2020,254 @@ void ListWidget::refreshDownloadStates() {
 			: photo
 			? photo->loading()
 			: false;
-		if (state == BatchDownloadState::Failed) {
+		if (!loading) {
+			inactive = true;
 			continue;
 		}
-		if (state == BatchDownloadState::Downloaded) {
-			const auto path = _batchDownloadPaths.find(item);
-			if (path == _batchDownloadPaths.end()
-				|| !QFileInfo::exists(path->second)) {
-				stale.push_back(item);
+		data.state = BatchDownloadState::Downloading;
+		repaintDownloadState(item);
+		active = true;
+	}
+	for (auto &[id, data] : _batchDownloadMedia) {
+		if (!isTracked(data)) {
+			continue;
+		}
+		if (const auto aliases = _batchDownloadMediaItems.find(id);
+			aliases != _batchDownloadMediaItems.end()) {
+			for (const auto item : aliases->second) {
+				const auto document = item->media()->document();
+				if (!data.document || document->loading()) {
+					data.document = document;
+				}
+			}
+		}
+		if (!data.document || !data.document->loading()) {
+			inactive = true;
+			continue;
+		}
+		data.state = BatchDownloadState::Downloading;
+		if (const auto aliases = _batchDownloadMediaItems.find(id);
+			aliases != _batchDownloadMediaItems.end()) {
+			for (const auto item : aliases->second) {
+				repaintItem(item);
+			}
+		}
+		active = true;
+	}
+	if (inactive) {
+		refreshDownloadStates();
+	} else if (active) {
+		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
+	}
+}
+
+void ListWidget::refreshDownloadStates() {
+	if (_batchDownloadStarting) {
+		return;
+	}
+	auto active = false;
+	auto changed = false;
+	auto staleItems = std::vector<not_null<const HistoryItem*>>();
+	struct PersistedMediaFile {
+		FullMsgId id;
+		Menu::BatchDownloadFile file;
+	};
+	struct PersistedMediaState {
+		std::optional<PersistedMediaFile> completed;
+		std::optional<PersistedMediaFile> incomplete;
+	};
+	struct StaleMedia {
+		BatchDownloadMediaId id;
+		std::optional<FullMsgId> persistedId;
+	};
+	auto staleMedia = std::vector<StaleMedia>();
+	auto forgotten = base::flat_map<
+		Main::Session*,
+		std::vector<FullMsgId>>();
+	auto files = base::flat_map<Main::Session*, Menu::BatchDownloadFiles>();
+	for (const auto &[item, data] : _batchDownloadItems) {
+		const auto owner = &item->history()->session();
+		if (!files.contains(owner)) {
+			files.emplace(owner, Menu::BatchDownloadFilesFor(owner));
+		}
+	}
+	for (const auto &[id, data] : _batchDownloadMedia) {
+		if (!files.contains(id.first)) {
+			files.emplace(id.first, Menu::BatchDownloadFilesFor(id.first));
+		}
+	}
+	auto persistedMedia = base::flat_map<
+		BatchDownloadMediaId,
+		PersistedMediaState>();
+	const auto addPersistedMedia = [&](
+			const BatchDownloadMediaId &mediaId,
+			FullMsgId id,
+			const Menu::BatchDownloadFile &file) {
+		if (file.completed && !QFileInfo::exists(file.path)) {
+			forgotten[mediaId.first].push_back(id);
+			return;
+		}
+		auto &state = persistedMedia[mediaId];
+		auto &slot = file.completed ? state.completed : state.incomplete;
+		if (!slot || id < slot->id) {
+			slot = PersistedMediaFile{ id, file };
+		}
+	};
+	for (const auto &[owner, sessionFiles] : files) {
+		for (const auto &[id, file] : sessionFiles) {
+			if (file.mediaKey) {
+				addPersistedMedia(
+					BatchDownloadMediaId(owner, *file.mediaKey),
+					id,
+					file);
+			}
+		}
+	}
+	for (const auto &[mediaId, aliases] : _batchDownloadMediaItems) {
+		if (!_batchDownloadMedia.contains(mediaId)) {
+			continue;
+		}
+		const auto &sessionFiles = files.find(mediaId.first)->second;
+		for (const auto item : aliases) {
+			const auto file = sessionFiles.find(item->fullId());
+			if (file != sessionFiles.end() && !file->second.mediaKey) {
+				addPersistedMedia(
+					mediaId,
+					file->first,
+					file->second);
+			}
+		}
+	}
+	for (auto &[item, data] : _batchDownloadItems) {
+		if (batchDownloadMediaId(item)) {
+			continue;
+		}
+		const auto media = item->media();
+		const auto photo = media ? media->photo() : nullptr;
+		const auto document = media ? media->document() : nullptr;
+		const auto loading = document
+			? document->loading()
+			: photo
+			? photo->loading()
+			: false;
+		if (loading) {
+			if (data.state != BatchDownloadState::Downloading) {
+				data.state = BatchDownloadState::Downloading;
+				changed = true;
+			}
+			repaintDownloadState(item);
+			active = true;
+			continue;
+		}
+		if (data.state == BatchDownloadState::Downloaded
+			&& !data.path.isEmpty()
+			&& QFileInfo::exists(data.path)) {
+			continue;
+		}
+		const auto &sessionFiles = files.find(
+			&item->history()->session())->second;
+		const auto persisted = sessionFiles.find(item->fullId());
+		if (persisted == sessionFiles.end()) {
+			staleItems.push_back(item);
+		} else if (persisted->second.completed
+			&& QFileInfo::exists(persisted->second.path)) {
+			data.state = BatchDownloadState::Downloaded;
+			data.path = persisted->second.path;
+			changed = true;
+			repaintDownloadState(item);
+		} else if (!persisted->second.completed) {
+			data.state = BatchDownloadState::Failed;
+			changed = true;
+			repaintDownloadState(item);
+		} else {
+			forgotten[&item->history()->session()].push_back(item->fullId());
+			staleItems.push_back(item);
+		}
+	}
+	for (auto &[id, data] : _batchDownloadMedia) {
+		if (const auto aliases = _batchDownloadMediaItems.find(id);
+			aliases != _batchDownloadMediaItems.end()) {
+			for (const auto item : aliases->second) {
+				const auto document = item->media()->document();
+				if (!data.document || document->loading()) {
+					data.document = document;
+				}
+			}
+		}
+		const auto loading = data.document && data.document->loading();
+		const auto persisted = persistedMedia.find(id);
+		auto persistedId = std::optional<FullMsgId>();
+		auto persistedFile = (const Menu::BatchDownloadFile*)(nullptr);
+		if (persisted != persistedMedia.end()) {
+			const auto selected = persisted->second.completed
+				? &*persisted->second.completed
+				: persisted->second.incomplete
+				? &*persisted->second.incomplete
+				: nullptr;
+			if (selected) {
+				persistedId = selected->id;
+				persistedFile = &selected->file;
+			}
+		}
+		if (loading) {
+			if (data.state != BatchDownloadState::Downloading) {
+				data.state = BatchDownloadState::Downloading;
+				changed = true;
+			}
+			active = true;
+			if (const auto aliases = _batchDownloadMediaItems.find(id);
+				aliases != _batchDownloadMediaItems.end()) {
+				for (const auto item : aliases->second) {
+					repaintItem(item);
+				}
 			}
 			continue;
 		}
-		active = true;
-		const auto next = loading
-			? BatchDownloadState::Downloading
-			: BatchDownloadState::Waiting;
-		if (state != next) {
-			state = next;
-			repaintItem(item);
+		if (data.state == BatchDownloadState::Downloaded
+			&& !data.path.isEmpty()
+			&& QFileInfo::exists(data.path)) {
+			continue;
+		}
+		if (!persistedFile) {
+			staleMedia.push_back({ id, std::nullopt });
+		} else if (persistedFile->completed
+			&& QFileInfo::exists(persistedFile->path)) {
+			data.state = BatchDownloadState::Downloaded;
+			data.path = persistedFile->path;
+			changed = true;
+			update();
+		} else if (!persistedFile->completed) {
+			data.state = BatchDownloadState::Failed;
+			changed = true;
+			update();
+		} else {
+			staleMedia.push_back({ id, persistedId });
 		}
 	}
-	for (const auto &item : stale) {
-		_batchDownloadStates.remove(item);
-		_batchDownloadPaths.remove(item);
-		Menu::ForgetBatchDownloadFile(
-			&item->history()->session(),
-			item->fullId());
-		repaintItem(item);
+	for (const auto item : staleItems) {
+		_batchDownloadItems.remove(item);
+		repaintDownloadState(item);
+		changed = true;
+	}
+	for (const auto &entry : staleMedia) {
+		_batchDownloadMedia.remove(entry.id);
+		if (entry.persistedId) {
+			forgotten[entry.id.first].push_back(*entry.persistedId);
+		}
+		if (const auto aliases = _batchDownloadMediaItems.find(entry.id);
+			aliases != _batchDownloadMediaItems.end()) {
+			for (const auto item : aliases->second) {
+				_batchDownloadItems.remove(item);
+				repaintItem(item);
+			}
+		}
+		changed = true;
+	}
+	for (const auto &[owner, ids] : forgotten) {
+		Menu::ForgetBatchDownloadFiles(owner, ids);
+	}
+	if (changed) {
+		pushSelectedItems();
 	}
 	if (active) {
 		_batchDownloadTimer.callOnce(kBatchDownloadStatusRefresh);
@@ -1730,18 +2275,35 @@ void ListWidget::refreshDownloadStates() {
 }
 
 void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
-	for (const auto &[item, state] : _batchDownloadStates) {
+	const auto paint = [&](not_null<const HistoryItem*> item) {
+		const auto data = batchDownloadData(item);
+		if (!data) {
+			return;
+		}
 		const auto found = findItemByItem(item);
 		if (!found || !found->geometry.intersects(clip)) {
-			continue;
+			return;
 		}
+		const auto media = item->media();
+		const auto photo = media ? media->photo() : nullptr;
+		const auto document = data->document
+			? data->document
+			: media
+			? media->document()
+			: nullptr;
+		const auto progress = std::clamp(qRound((document
+			? document->progress()
+			: photo
+			? photo->progress()
+			: 0.) * 100.), 0, 100);
+		const auto state = data->state;
 		const auto fullText = (state == BatchDownloadState::Waiting)
-			? tr::ayu_MediaDownloadWaiting(tr::now)
+			? u"\u2193"_q
 			: (state == BatchDownloadState::Downloading)
-			? tr::ayu_MediaDownloadDownloading(tr::now)
+			? u"\u2193 %1%"_q.arg(progress)
 			: (state == BatchDownloadState::Downloaded)
-			? tr::ayu_MediaDownloadDownloaded(tr::now)
-			: tr::ayu_MediaDownloadFailed(tr::now);
+			? u"\u2713"_q
+			: u"\u00d7"_q;
 		const auto maxTextWidth = std::max(
 			found->geometry.width()
 				- 2 * st::infoMediaDownloadStatusMargin
@@ -1749,7 +2311,7 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 				- st::infoMediaDownloadStatusPadding.right(),
 			0);
 		if (!maxTextWidth) {
-			continue;
+			return;
 		}
 		const auto text = st::infoMediaDownloadStatusFont->elided(
 			fullText,
@@ -1781,12 +2343,29 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 		p.setFont(st::infoMediaDownloadStatusFont);
 		p.setPen((state == BatchDownloadState::Failed)
 			? st::infoMediaDownloadStatusFailedFg
-			: st::infoMediaDownloadStatusFg);
+			: (state == BatchDownloadState::Downloaded)
+			? st::infoMediaDownloadStatusDownloadedFg
+			: st::infoMediaDownloadStatusDownloadingFg);
 		p.drawText(
 			badge.x() + st::infoMediaDownloadStatusPadding.left(),
 			badge.y() + st::infoMediaDownloadStatusPadding.top()
 				+ st::infoMediaDownloadStatusFont->ascent,
 			text);
+	};
+	for (const auto &[item, data] : _batchDownloadItems) {
+		if (!batchDownloadMediaId(item)) {
+			paint(item);
+		}
+	}
+	for (const auto &entry : _batchDownloadMedia) {
+		const auto &id = entry.first;
+		const auto items = _batchDownloadMediaItems.find(id);
+		if (items == _batchDownloadMediaItems.end()) {
+			continue;
+		}
+		for (const auto item : items->second) {
+			paint(item);
+		}
 	}
 }
 

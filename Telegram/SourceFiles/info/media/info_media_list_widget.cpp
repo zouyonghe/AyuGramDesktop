@@ -2284,12 +2284,12 @@ void ListWidget::paintSelectionStates(Painter &p, QRect clip) {
 	}
 	if (!_selectionRoundCheckbox) {
 		_selectionRoundCheckbox = std::make_unique<Ui::RoundCheckbox>(
-			st::msgSelectionCheck,
+			st::infoMediaSelectionCheck,
 			[this] { update(); });
 	}
 	_selectionRoundCheckbox->setChecked(true, anim::type::normal);
 
-	const auto &style = st::msgSelectionCheck;
+	const auto &style = st::infoMediaSelectionCheck;
 	const auto selected = [&](not_null<const HistoryItem*> item) {
 		if (const auto i = _dragSelected.find(item);
 			i != _dragSelected.end()) {

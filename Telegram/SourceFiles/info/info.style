@@ -90,6 +90,9 @@ infoMediaDownloadStatusPadding: margins(6px, 3px, 6px, 3px);
 infoMediaDownloadStatusMargin: 6px;
 infoMediaDownloadStatusRadius: 4px;
 infoMediaSelectionMargin: 6px;
+infoMediaSelectionCheck: RoundCheckbox(defaultPeerListCheck) {
+	bgActive: overviewCheckBgActive;
+}
 
 infoMediaSearch: SearchFieldRow {
 	height: 44px;

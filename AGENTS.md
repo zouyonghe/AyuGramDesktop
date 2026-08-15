@@ -2,7 +2,8 @@
 
 This guide defines repository-wide instructions for coding agents working with the Telegram Desktop codebase.
 
-Avoid building the project.
+Use GitHub Actions workflows for build validation by default. Do not run local
+builds unless the user explicitly requests a local build.
 
 If you're asked to create a Pull Request, then clearly state in PR description that it was AI generated.
 
@@ -42,6 +43,31 @@ L:\Telegram\ThirdParty\         # Build tools (NuGet, Python, etc.)
 Dependencies are located relative to the repository: `../Libraries`, `../win64/Libraries`, or `../ThirdParty`.
 
 ## Build Configuration
+
+### GitHub Actions Builds
+
+Build validation runs through these Debug workflows:
+
+- `.github/workflows/macos-debug.yml` - macOS arm64
+- `.github/workflows/linux-debug.yml` - Rocky Linux 8
+- `.github/workflows/windows-debug.yml` - Windows x64
+
+When the user requests a build, dispatch the relevant workflow instead of
+building in the local checkout:
+
+```bash
+gh workflow run macos-debug.yml --ref <branch>
+gh workflow run linux-debug.yml --ref <branch>
+gh workflow run windows-debug.yml --ref <branch>
+```
+
+Monitor the run and report its URL, final status, failed step, and artifact
+name. Use `gh run list --workflow <workflow> --branch <branch>` and
+`gh run watch <run-id> --exit-status` for verification. Do not claim a build
+passed until GitHub Actions reports success.
+
+Local build commands below are fallback instructions for an explicitly
+requested local build only. They do not override the GitHub Actions default.
 
 ### Build Commands
 

@@ -645,7 +645,7 @@ void ListWidget::repaintDownloadState(
 	if (const auto id = batchDownloadMediaId(item)) {
 		if (const auto i = _batchDownloadMediaItems.find(*id);
 			i != _batchDownloadMediaItems.end()) {
-			for (const auto alias : i->second) {
+			for (const auto &alias : i->second) {
 				repaintItem(alias);
 			}
 			return;
@@ -1900,7 +1900,7 @@ void ListWidget::downloadSelected() {
 	}
 	previous.reserve(items.size());
 	auto mediaSnapshots = base::flat_set<BatchDownloadMediaId>();
-	for (const auto item : items) {
+	for (const auto &item : items) {
 		const auto mediaId = batchDownloadMediaId(item);
 		const auto data = batchDownloadData(item);
 		if (!mediaId || mediaSnapshots.emplace(*mediaId).second) {
@@ -1981,7 +1981,7 @@ void ListWidget::downloadSelected() {
 				if (const auto aliases = strong->_batchDownloadMediaItems.find(
 						*entry.mediaId);
 					aliases != strong->_batchDownloadMediaItems.end()) {
-					for (const auto alias : aliases->second) {
+					for (const auto &alias : aliases->second) {
 						strong->repaintItem(alias);
 					}
 				}
@@ -2034,7 +2034,7 @@ void ListWidget::updateDownloadProgress() {
 		}
 		if (const auto aliases = _batchDownloadMediaItems.find(id);
 			aliases != _batchDownloadMediaItems.end()) {
-			for (const auto item : aliases->second) {
+			for (const auto &item : aliases->second) {
 				const auto document = item->media()->document();
 				if (!data.document || document->loading()) {
 					data.document = document;
@@ -2048,7 +2048,7 @@ void ListWidget::updateDownloadProgress() {
 		data.state = BatchDownloadState::Downloading;
 		if (const auto aliases = _batchDownloadMediaItems.find(id);
 			aliases != _batchDownloadMediaItems.end()) {
-			for (const auto item : aliases->second) {
+			for (const auto &item : aliases->second) {
 				repaintItem(item);
 			}
 		}
@@ -2128,7 +2128,7 @@ void ListWidget::refreshDownloadStates() {
 			continue;
 		}
 		const auto &sessionFiles = files.find(mediaId.first)->second;
-		for (const auto item : aliases) {
+		for (const auto &item : aliases) {
 			const auto file = sessionFiles.find(item->fullId());
 			if (file != sessionFiles.end() && !file->second.mediaKey) {
 				addPersistedMedia(
@@ -2187,7 +2187,7 @@ void ListWidget::refreshDownloadStates() {
 	for (auto &[id, data] : _batchDownloadMedia) {
 		if (const auto aliases = _batchDownloadMediaItems.find(id);
 			aliases != _batchDownloadMediaItems.end()) {
-			for (const auto item : aliases->second) {
+			for (const auto &item : aliases->second) {
 				const auto document = item->media()->document();
 				if (!data.document || document->loading()) {
 					data.document = document;
@@ -2217,7 +2217,7 @@ void ListWidget::refreshDownloadStates() {
 			active = true;
 			if (const auto aliases = _batchDownloadMediaItems.find(id);
 				aliases != _batchDownloadMediaItems.end()) {
-				for (const auto item : aliases->second) {
+				for (const auto &item : aliases->second) {
 					repaintItem(item);
 				}
 			}
@@ -2244,7 +2244,7 @@ void ListWidget::refreshDownloadStates() {
 			staleMedia.push_back({ id, persistedId });
 		}
 	}
-	for (const auto item : staleItems) {
+	for (const auto &item : staleItems) {
 		_batchDownloadItems.remove(item);
 		repaintDownloadState(item);
 		changed = true;
@@ -2256,7 +2256,7 @@ void ListWidget::refreshDownloadStates() {
 		}
 		if (const auto aliases = _batchDownloadMediaItems.find(entry.id);
 			aliases != _batchDownloadMediaItems.end()) {
-			for (const auto item : aliases->second) {
+			for (const auto &item : aliases->second) {
 				_batchDownloadItems.remove(item);
 				repaintItem(item);
 			}
@@ -2363,7 +2363,7 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 		if (items == _batchDownloadMediaItems.end()) {
 			continue;
 		}
-		for (const auto item : items->second) {
+		for (const auto &item : items->second) {
 			paint(item);
 		}
 	}

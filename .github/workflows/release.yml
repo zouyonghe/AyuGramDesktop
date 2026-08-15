@@ -48,7 +48,7 @@ jobs:
         run: |
           existing=$(gh api \
             "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
-            --jq '.object.sha' 2>/dev/null || true)
+            --jq '.object.sha' 2>/dev/null) || existing=
           if [ -n "$existing" ]; then
             if [ "$existing" != "$SHA" ]; then
               echo "Tag $TAG points to $existing instead of $SHA" >&2

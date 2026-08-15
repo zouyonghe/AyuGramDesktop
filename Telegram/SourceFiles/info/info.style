@@ -83,12 +83,18 @@ ProfileTabsStrip {
 infoMediaHeaderFg: windowFg;
 infoMediaDownloadStatusFont: font(11px semibold);
 infoMediaDownloadStatusDownloadingFg: statisticsChartLineGolden;
-infoMediaDownloadStatusDownloadedFg: boxTextFgGood;
 infoMediaDownloadStatusFailedFg: boxTextFgError;
 infoMediaDownloadStatusBg: windowBgOver;
 infoMediaDownloadStatusPadding: margins(6px, 3px, 6px, 3px);
 infoMediaDownloadStatusMargin: 6px;
 infoMediaDownloadStatusRadius: 4px;
+infoMediaDownloadedStatusFont: font(13px bold);
+infoMediaDownloadedStatusFg: windowFgActive;
+infoMediaDownloadedStatusBg: msgFile2BgOver;
+infoMediaDownloadedStatusBorder: shadowFg;
+infoMediaDownloadedStatusBorderWidth: 1px;
+infoMediaDownloadedStatusSize: 22px;
+infoMediaDownloadedStatusRadius: 4px;
 infoMediaSelectionMargin: 6px;
 infoMediaSelectionCheck: RoundCheckbox(defaultPeerListCheck) {
 	bgActive: overviewCheckBgActive;

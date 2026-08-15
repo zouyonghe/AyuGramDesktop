@@ -2376,6 +2376,30 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 			: (state == BatchDownloadState::Downloaded)
 			? u"\u2713"_q
 			: u"\u00d7"_q;
+		if (state == BatchDownloadState::Downloaded) {
+			const auto size = st::infoMediaDownloadedStatusSize;
+			const auto badge = QRect(
+				found->geometry.right()
+					- st::infoMediaDownloadStatusMargin
+					- size,
+				found->geometry.bottom()
+					- st::infoMediaDownloadStatusMargin
+					- size,
+				size,
+				size);
+			p.setPen(QPen(
+				st::infoMediaDownloadedStatusBorder,
+				st::infoMediaDownloadedStatusBorderWidth));
+			p.setBrush(st::infoMediaDownloadedStatusBg);
+			p.drawRoundedRect(
+				badge,
+				st::infoMediaDownloadedStatusRadius,
+				st::infoMediaDownloadedStatusRadius);
+			p.setFont(st::infoMediaDownloadedStatusFont);
+			p.setPen(st::infoMediaDownloadedStatusFg);
+			p.drawText(badge, Qt::AlignCenter, fullText);
+			return;
+		}
 		const auto maxTextWidth = std::max(
 			found->geometry.width()
 				- 2 * st::infoMediaDownloadStatusMargin
@@ -2415,8 +2439,6 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 		p.setFont(st::infoMediaDownloadStatusFont);
 		p.setPen((state == BatchDownloadState::Failed)
 			? st::infoMediaDownloadStatusFailedFg
-			: (state == BatchDownloadState::Downloaded)
-			? st::infoMediaDownloadStatusDownloadedFg
 			: st::infoMediaDownloadStatusDownloadingFg);
 		p.drawText(
 			badge.x() + st::infoMediaDownloadStatusPadding.left(),

@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v*-ayu.*"
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.2.3
+        description: Release tag, for example v7.0.9-ayu.1a5bceb
         required: true
         type: string
 
@@ -33,8 +33,13 @@ jobs:
           else
             tag="$REF_NAME"
           fi
-          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Version must match vMAJOR.MINOR.PATCH: $tag" >&2
+          short_sha="${GITHUB_SHA:0:7}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-ayu\.[0-9a-f]{7}$ ]]; then
+            echo "Tag must match vMAJOR.MINOR.PATCH-ayu.COMMIT: $tag" >&2
+            exit 1
+          fi
+          if [ "${tag##*.}" != "$short_sha" ]; then
+            echo "Tag commit ${tag##*.} does not match $short_sha" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

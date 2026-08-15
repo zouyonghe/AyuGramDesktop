@@ -233,8 +233,10 @@ void ItemBase::paintCheckbox(
 		QPoint position,
 		bool selected,
 		const PaintContext *context) {
-	const auto selecting = context->selecting
-		&& !context->skipSelectionCheck;
+	if (context->skipSelectionCheck) {
+		return;
+	}
+	const auto selecting = context->selecting;
 	if (selected || selecting) {
 		ensureCheckboxCreated();
 	}

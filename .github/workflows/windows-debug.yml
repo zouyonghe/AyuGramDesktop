@@ -18,19 +18,16 @@ jobs:
         shell: cmd
 
     steps:
-      - name: Free preinstalled software
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          tool-cache: true
-          large-packages: true
-          swap-storage: true
-
       - name: Free runner disk space
         shell: pwsh
         run: |
           @(
             $env:ANDROID_HOME,
-            "C:\ghcup"
+            "C:\ghcup",
+            "C:\Program Files\Android",
+            "C:\Program Files\dotnet",
+            "C:\Users\runneradmin\.cargo",
+            "C:\Users\runneradmin\.rustup"
           ) | Where-Object { $_ -and (Test-Path $_) } | ForEach-Object {
             Remove-Item -Recurse -Force $_
           }

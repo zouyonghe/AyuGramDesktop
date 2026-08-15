@@ -18,6 +18,13 @@ jobs:
         shell: cmd
 
     steps:
+      - name: Free preinstalled software
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+          large-packages: true
+          swap-storage: true
+
       - name: Free runner disk space
         shell: pwsh
         run: |

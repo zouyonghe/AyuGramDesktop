@@ -143,6 +143,7 @@ private:
 		BatchDownloadState state = BatchDownloadState::Failed;
 		QString path;
 		DocumentData *document = nullptr;
+		int displayProgress = -1;
 	};
 	using BatchDownloadMediaId = std::pair<Main::Session*, MediaKey>;
 	using Section = ListSection;

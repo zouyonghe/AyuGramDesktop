@@ -91,7 +91,7 @@ namespace Media {
 namespace {
 
 constexpr auto kMediaCountForSearch = 10;
-constexpr auto kBatchDownloadStatusRefresh = crl::time(200);
+constexpr auto kBatchDownloadStatusRefresh = crl::time(500);
 
 } // namespace
 
@@ -643,16 +643,27 @@ ListWidget::BatchDownloadData &ListWidget::ensureBatchDownloadData(
 
 void ListWidget::repaintDownloadState(
 		not_null<const HistoryItem*> item) {
+	const auto visible = QRect(
+		0,
+		_visibleTop,
+		width(),
+		_visibleBottom - _visibleTop);
+	const auto repaint = [&](not_null<const HistoryItem*> item) {
+		if (const auto found = findItemByItem(item);
+			found && found->geometry.intersects(visible)) {
+			rtlupdate(found->geometry);
+		}
+	};
 	if (const auto id = batchDownloadMediaId(item)) {
 		if (const auto i = _batchDownloadMediaItems.find(*id);
 			i != _batchDownloadMediaItems.end()) {
 			for (const auto &alias : i->second) {
-				repaintItem(alias);
+				repaint(alias);
 			}
 			return;
 		}
 	}
-	repaintItem(item);
+	repaint(item);
 }
 
 MessageIdsList ListWidget::collectSelectedIds() const {
@@ -2038,8 +2049,17 @@ void ListWidget::updateDownloadProgress() {
 			inactive = true;
 			continue;
 		}
-		data.state = BatchDownloadState::Downloading;
-		repaintDownloadState(item);
+		const auto progress = std::clamp(qRound((document
+			? document->progress()
+			: photo
+			? photo->progress()
+			: 0.) * 100.), 0, 100);
+		if (data.state != BatchDownloadState::Downloading
+			|| data.displayProgress != progress) {
+			data.state = BatchDownloadState::Downloading;
+			data.displayProgress = progress;
+			repaintDownloadState(item);
+		}
 		active = true;
 	}
 	for (auto &[id, data] : _batchDownloadMedia) {
@@ -2059,11 +2079,17 @@ void ListWidget::updateDownloadProgress() {
 			inactive = true;
 			continue;
 		}
-		data.state = BatchDownloadState::Downloading;
-		if (const auto aliases = _batchDownloadMediaItems.find(id);
-			aliases != _batchDownloadMediaItems.end()) {
-			for (const auto &item : aliases->second) {
-				repaintItem(item);
+		const auto progress = std::clamp(
+			qRound(data.document->progress() * 100.),
+			0,
+			100);
+		if (data.state != BatchDownloadState::Downloading
+			|| data.displayProgress != progress) {
+			data.state = BatchDownloadState::Downloading;
+			data.displayProgress = progress;
+			if (const auto aliases = _batchDownloadMediaItems.find(id);
+				aliases != _batchDownloadMediaItems.end()) {
+				repaintDownloadState(aliases->second.front());
 			}
 		}
 		active = true;
@@ -2374,11 +2400,13 @@ void ListWidget::paintDownloadStates(Painter &p, QRect clip) {
 			: media
 			? media->document()
 			: nullptr;
-		const auto progress = std::clamp(qRound((document
-			? document->progress()
-			: photo
-			? photo->progress()
-			: 0.) * 100.), 0, 100);
+		const auto progress = (data->displayProgress >= 0)
+			? data->displayProgress
+			: std::clamp(qRound((document
+				? document->progress()
+				: photo
+				? photo->progress()
+				: 0.) * 100.), 0, 100);
 		const auto state = data->state;
 		const auto fullText = (state == BatchDownloadState::Waiting)
 			? u"\u2193"_q

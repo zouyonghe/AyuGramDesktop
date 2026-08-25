@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include "core/mime_type.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
@@ -392,8 +393,39 @@ bool DocumentSavedToPath(
 		not_null<DocumentData*> document,
 		const QString &path) {
 	const auto info = QFileInfo(path);
-	return info.exists()
+	return document->status != FileDownloadFailed
+		&& !document->cancelled()
+		&& info.isFile()
 		&& info.size() == document->size;
+}
+
+QString BatchDownloadFileName(not_null<DocumentData*> document) {
+	const auto isVideo = document->isVideoFile()
+		|| document->isVideoMessage();
+	const auto mime = Core::MimeTypeForName(document->mimeString());
+	const auto patterns = mime.globPatterns();
+	const auto extension = patterns.isEmpty()
+		? (isVideo ? u".mp4"_q : QString())
+		: QString(patterns.front()).replace('*', QString());
+	const auto filename = QFileInfo(document->filename()).fileName();
+	if (!filename.isEmpty() && filename != u"."_q && filename != u".."_q) {
+		return (isVideo && QFileInfo(filename).suffix().isEmpty())
+			? (filename + extension)
+			: filename;
+	}
+	const auto prefix = document->isVideoMessage()
+		? u"round"_q
+		: document->isVideoFile()
+		? u"video"_q
+		: document->isAnimation()
+		? u"animation"_q
+		: u"file"_q;
+	return prefix
+		+ u"_"_q
+		+ QString::number(document->getDC())
+		+ u"_"_q
+		+ QString::number(document->id)
+		+ extension;
 }
 
 struct ReservedDownloadPath {
@@ -943,13 +975,7 @@ Fn<void()> PrepareDownloadAction(
 					continue;
 				}
 			}
-			const auto filename = QFileInfo(
-				document->filename()).fileName();
-			const auto safeFilename = (filename.isEmpty()
-				|| filename == u"."_q
-				|| filename == u".."_q)
-				? u"file"_q
-				: filename;
+			const auto safeFilename = BatchDownloadFileName(document);
 			auto reserved = ReserveDownloadPath(
 				safeFilename,
 				document->filepath(true),

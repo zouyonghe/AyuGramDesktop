@@ -409,6 +409,8 @@ private:
 	uint16 _mouseTextSymbol = 0;
 	bool _pressWasInactive = false;
 	bool _batchSelectionEnabled = false;
+	bool _rightSelecting = false;
+	bool _suppressContextMenu = false;
 	SelectedMap _selected;
 	SelectedMap _dragSelected;
 	base::flat_map<not_null<const HistoryItem*>, BatchDownloadData>

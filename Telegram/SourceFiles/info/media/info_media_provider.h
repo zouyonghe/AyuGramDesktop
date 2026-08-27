@@ -60,7 +60,8 @@ public:
 		not_null<const HistoryItem*> fromItem,
 		bool skipFrom,
 		not_null<const HistoryItem*> tillItem,
-		bool skipTill) override;
+		bool skipTill,
+		int limit) override;
 
 	bool allowSaveFileAs(
 		not_null<const HistoryItem*> item,

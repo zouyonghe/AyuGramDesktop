@@ -17,7 +17,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_media_types.h"
 #include "data/data_session.h"
 #include "main/main_account.h"
-#include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
@@ -35,8 +34,7 @@ using namespace Media;
 } // namespace
 
 Provider::Provider(not_null<AbstractController*> controller)
-: _controller(controller)
-, _storiesAddToAlbumId(_controller->storiesAddToAlbumId()) {
+: _controller(controller) {
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
 		for (auto &layout : _layouts) {
@@ -493,7 +491,8 @@ void Provider::applyDragSelection(
 		not_null<const HistoryItem*> fromItem,
 		bool skipFrom,
 		not_null<const HistoryItem*> tillItem,
-		bool skipTill) {
+		bool skipTill,
+		int limit) {
 	auto from = ranges::find(_elements, fromItem, &Element::item);
 	auto till = ranges::find(_elements, tillItem, &Element::item);
 	if (from == end(_elements) || till == end(_elements)) {
@@ -510,9 +509,6 @@ void Provider::applyDragSelection(
 		return;
 	}
 	const auto search = !_queryWords.isEmpty();
-	const auto selectLimit = _storiesAddToAlbumId
-		? _controller->session().appConfig().storiesAlbumLimit()
-		: MaxSelectedItems;
 	auto chosen = base::flat_set<not_null<const HistoryItem*>>();
 	chosen.reserve(till - from);
 	for (auto i = from; i != till; ++i) {
@@ -525,7 +521,7 @@ void Provider::applyDragSelection(
 			selected,
 			item,
 			computeSelectionData(item, FullSelection),
-			selectLimit);
+			limit);
 	}
 	if (selected.size() != chosen.size()) {
 		for (auto i = begin(selected); i != end(selected);) {

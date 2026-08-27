@@ -64,7 +64,8 @@ public:
 		not_null<const HistoryItem*> fromItem,
 		bool skipFrom,
 		not_null<const HistoryItem*> tillItem,
-		bool skipTill) override;
+		bool skipTill,
+		int limit) override;
 
 	bool allowSaveFileAs(
 		not_null<const HistoryItem*> item,
@@ -130,7 +131,6 @@ private:
 	std::optional<int> _fullCount;
 	base::flat_set<not_null<const HistoryItem*>> _downloading;
 	base::flat_set<not_null<const HistoryItem*>> _downloaded;
-	int _storiesAddToAlbumId = 0;
 
 	std::vector<Element> _addPostponed;
 

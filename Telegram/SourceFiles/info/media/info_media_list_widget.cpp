@@ -1531,7 +1531,8 @@ void ListWidget::mousePressEvent(QMouseEvent *e) {
 }
 
 void ListWidget::mouseMoveEvent(QMouseEvent *e) {
-	const auto buttonsPressed = (e->buttons() & (Qt::LeftButton | Qt::MiddleButton));
+	const auto buttonsPressed = (e->buttons()
+		& (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton));
 	if (!buttonsPressed && _mouseAction != MouseAction::None) {
 		mouseReleaseEvent(e);
 	}
@@ -1546,6 +1547,12 @@ void ListWidget::mouseReleaseEvent(QMouseEvent *e) {
 }
 
 void ListWidget::mouseDoubleClickEvent(QMouseEvent *e) {
+	if (_batchSelectionEnabled && e->button() == Qt::RightButton) {
+		mouseActionCancel();
+		_suppressContextMenu = true;
+		e->accept();
+		return;
+	}
 	mouseActionStart(e->globalPos(), e->button());
 	trySwitchToWordSelection();
 }
@@ -1883,6 +1890,10 @@ void ListWidget::showContextMenu(
 void ListWidget::contextMenuEvent(QContextMenuEvent *e) {
 	if (_batchSelectionEnabled
 		&& e->reason() == QContextMenuEvent::Mouse) {
+		if (_rightSelecting || std::exchange(_suppressContextMenu, false)) {
+			e->accept();
+			return;
+		}
 		mouseActionUpdate(e->globalPos());
 		if (_overState.item
 			&& _overState.inside
@@ -3053,7 +3064,8 @@ void ListWidget::updateDragSelection() {
 		fromState.item,
 		SkipSelectFromItem(fromState),
 		tillState.item,
-		SkipSelectTillItem(tillState));
+		SkipSelectTillItem(tillState),
+		_selectedLimit);
 	_dragSelectAction = [&] {
 		if (_dragSelected.empty()) {
 			return DragSelectAction::None;
@@ -3088,6 +3100,20 @@ void ListWidget::mouseActionStart(
 		const QPoint &globalPosition,
 		Qt::MouseButton button) {
 	mouseActionUpdate(globalPosition);
+	if (button == Qt::RightButton) {
+		_suppressContextMenu = false;
+		if (!_batchSelectionEnabled
+			|| _provider->hasSelectRestriction()
+			|| !_overState.item
+			|| !_overState.inside) {
+			return;
+		}
+		_rightSelecting = true;
+		_pressState = _overState;
+		_mouseAction = MouseAction::PrepareSelect;
+		repaintItem(_overLayout);
+		return;
+	}
 	if (button != Qt::LeftButton) {
 		return;
 	}
@@ -3214,6 +3240,7 @@ void ListWidget::mouseActionStart(
 void ListWidget::mouseActionCancel() {
 	_pressState = MouseState();
 	_mouseAction = MouseAction::None;
+	_rightSelecting = false;
 	clearDragSelection();
 	_wasSelectedText = false;
 	cancelReorder();
@@ -3271,8 +3298,11 @@ void ListWidget::performDrag() {
 void ListWidget::mouseActionFinish(
 		const QPoint &globalPosition,
 		Qt::MouseButton button) {
+	const auto releaseInside = rect().contains(mapFromGlobal(globalPosition));
 	mouseActionUpdate(globalPosition);
 
+	const auto rightSelecting = _rightSelecting
+		&& (button == Qt::RightButton);
 	const auto pressState = base::take(_pressState);
 	repaintItem(pressState.item);
 
@@ -3326,6 +3356,12 @@ void ListWidget::mouseActionFinish(
 		toggleItemSelection(pressState.item);
 	} else if (needSelectionClear) {
 		clearSelected();
+	} else if (rightSelecting
+		&& _mouseAction != MouseAction::Selecting
+		&& releaseInside
+		&& pressState.item == _overState.item
+		&& _overState.inside) {
+		toggleItemSelection(pressState.item);
 	} else if (_mouseAction == MouseAction::Selecting) {
 		if (!_dragSelected.empty()) {
 			applyDragSelection();
@@ -3338,6 +3374,10 @@ void ListWidget::mouseActionFinish(
 			}
 		}
 	}
+	if (rightSelecting) {
+		_suppressContextMenu = true;
+	}
+	_rightSelecting = false;
 	_mouseAction = MouseAction::None;
 	_mouseSelectType = TextSelectType::Letters;
 	//_widget->noSelectingScroll(); // #TODO scroll by drag

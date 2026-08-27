@@ -165,7 +165,8 @@ public:
 		not_null<const HistoryItem*> fromItem,
 		bool skipFrom,
 		not_null<const HistoryItem*> tillItem,
-		bool skipTill) = 0;
+		bool skipTill,
+		int limit) = 0;
 
 	[[nodiscard]] virtual bool allowSaveFileAs(
 		not_null<const HistoryItem*> item,

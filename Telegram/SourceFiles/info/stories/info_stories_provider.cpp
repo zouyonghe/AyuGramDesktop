@@ -403,7 +403,8 @@ void Provider::applyDragSelection(
 		not_null<const HistoryItem*> fromItem,
 		bool skipFrom,
 		not_null<const HistoryItem*> tillItem,
-		bool skipTill) {
+		bool skipTill,
+		int limit) {
 	const auto fromId = fromItem->id - (skipFrom ? 1 : 0);
 	const auto tillId = tillItem->id - (skipTill ? 0 : 1);
 	for (auto i = selected.begin(); i != selected.end();) {
@@ -424,7 +425,8 @@ void Provider::applyDragSelection(
 			ChangeItemSelection(
 				selected,
 				item,
-				computeSelectionData(item, FullSelection));
+				computeSelectionData(item, FullSelection),
+				limit);
 		}
 	}
 }

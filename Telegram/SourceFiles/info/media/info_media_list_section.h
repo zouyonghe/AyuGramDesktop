@@ -51,6 +51,10 @@ public:
 		const ListContext &context,
 		QRect clip,
 		int outerWidth) const;
+	void enumerateItems(
+		QRect clip,
+		const BaseLayout *draggedItem,
+		Fn<void(not_null<BaseLayout*>, QRect)> callback) const;
 
 	void paintFloatingHeader(Painter &p, int visibleTop, int outerWidth);
 

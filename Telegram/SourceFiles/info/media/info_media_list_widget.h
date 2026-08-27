@@ -426,6 +426,7 @@ private:
 	base::flat_set<GlobalMsgId> _batchDownloadMediaKeyMigrations;
 	base::Timer _batchDownloadTimer;
 	bool _batchDownloadStarting = false;
+	bool _restoreDownloadStatesPending = false;
 	rpl::event_stream<SelectedItems> _selectedListStream;
 	style::cursor _cursor = style::cur_default;
 	DragSelectAction _dragSelectAction = DragSelectAction::None;

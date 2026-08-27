@@ -48,6 +48,9 @@ using BatchDownloadFiles = base::flat_map<FullMsgId, BatchDownloadFile>;
 [[nodiscard]] bool MigrateBatchDownloadFileMediaKeys(
 	not_null<Main::Session*> session,
 	const std::vector<std::pair<FullMsgId, MediaKey>> &migrations);
+[[nodiscard]] bool MarkBatchDownloadFilesCompleted(
+	not_null<Main::Session*> session,
+	BatchDownloadFiles files);
 void ForgetBatchDownloadFile(
 	not_null<Main::Session*> session,
 	FullMsgId id);

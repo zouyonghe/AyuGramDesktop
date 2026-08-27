@@ -358,6 +358,36 @@ void ListSection::paint(
 	}
 }
 
+void ListSection::enumerateItems(
+		QRect clip,
+		const BaseLayout *draggedItem,
+		Fn<void(not_null<BaseLayout*>, QRect)> callback) const {
+	if (!_mosaic.empty()) {
+		_mosaic.paint([&](not_null<BaseLayout*> item, QPoint point) {
+			if (item == draggedItem) {
+				return;
+			}
+			callback(item, QRect(
+				point,
+				QSize(item->width(), item->height())));
+		}, clip);
+		return;
+	}
+	const auto from = findItemAfterTop(clip.y());
+	const auto till = findItemAfterBottom(from, clip.y() + clip.height());
+	for (auto i = from; i != till; ++i) {
+		const auto item = *i;
+		if (item == draggedItem) {
+			continue;
+		}
+		auto rect = findItemRect(item);
+		rect.translate(item->shift());
+		if (rect.intersects(clip)) {
+			callback(item, rect);
+		}
+	}
+}
+
 void ListSection::paintFloatingHeader(
 		Painter &p,
 		int visibleTop,

@@ -872,6 +872,7 @@ Fn<void()> PrepareDownloadAction(
 		};
 		auto downloads = std::vector<DocumentDownload>();
 		auto pending = base::flat_map<Main::Session*, BatchDownloads>();
+		auto persisted = base::flat_map<Main::Session*, BatchDownloads>();
 		auto reservedPaths = base::flat_set<QString>();
 		auto blocked = base::flat_set<Main::Session*>();
 		auto existing = base::flat_map<Main::Session*, BatchDownloads>();
@@ -976,9 +977,32 @@ Fn<void()> PrepareDownloadAction(
 				}
 			}
 			const auto safeFilename = BatchDownloadFileName(document);
+			const auto currentPath = document->filepath(true);
+			if (!document->loading()
+				&& !currentPath.isEmpty()
+				&& !DocumentSavedToPath(document, currentPath)) {
+				const auto ownerFiles = persisted.find(owner);
+				const auto &sessionFiles = (ownerFiles != persisted.end())
+					? ownerFiles->second
+					: persisted.emplace(
+						owner,
+						ReadBatchDownloads(owner)).first->second;
+				const auto interrupted = ranges::any_of(
+					sessionFiles,
+					[&](const auto &file) {
+						return !file.second.completed
+							&& DownloadPathIdentity(file.second.path)
+								== DownloadPathIdentity(currentPath);
+					});
+				if (interrupted) {
+					QFile::remove(currentPath);
+				}
+			}
 			auto reserved = ReserveDownloadPath(
 				safeFilename,
-				document->filepath(true),
+				DocumentSavedToPath(document, currentPath)
+					? currentPath
+					: QString(),
 				folderPath);
 			while (!reserved.path.isEmpty()
 				&& !reservedPaths.emplace(
@@ -1173,6 +1197,15 @@ void AddAction(
 BatchDownloadFiles BatchDownloadFilesFor(
 		not_null<Main::Session*> session) {
 	return ReadBatchDownloads(session);
+}
+
+bool MarkBatchDownloadFilesCompleted(
+		not_null<Main::Session*> session,
+	BatchDownloadFiles files) {
+	for (auto &[id, file] : files) {
+		file.completed = true;
+	}
+	return UpdateBatchDownloadFiles(session, std::move(files));
 }
 
 bool MigrateBatchDownloadFileMediaKey(

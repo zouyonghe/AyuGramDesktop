@@ -170,7 +170,13 @@ ListWidget::ListWidget(
 , _sectionsSortedById(!controller->isDownloads()
 	&& !controller->isGlobalMedia())
 , _checkMoveToOtherViewer([=] { checkMoveToOtherViewer(); })
-, _rowsScrollCache([=] { update(); })
+, _rowsScrollCache([=] {
+	if (base::take(_restoreDownloadStatesPending)) {
+		restoreDownloadStates();
+	}
+	update();
+})
+, _batchDownloadTimer([=] { updateDownloadProgress(); })
 , _dateBadge(std::make_unique<DateBadge>(
 		_provider->type(),
 		[=] { scrollDateCheck(); },

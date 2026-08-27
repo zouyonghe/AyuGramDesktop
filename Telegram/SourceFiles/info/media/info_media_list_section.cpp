@@ -253,13 +253,42 @@ void ListSection::paint(
 	}
 	auto localContext = context.layoutContext;
 	if (!_mosaic.empty()) {
+		const auto cache = (context.scrollCache
+			&& context.scrollCache->scrolling())
+			? context.scrollCache
+			: nullptr;
 		const auto paintItem = [&](not_null<BaseLayout*> item, QPoint point) {
 			p.translate(point.x(), point.y());
-			item->paint(
-				p,
-				clip.translated(-point),
-				itemSelection(item, context),
-				&localContext);
+			const auto selection = itemSelection(item, context);
+			const auto cached = cache
+				&& (selection == TextSelection())
+				&& !localContext.selecting
+				&& (item != context.hoveredItem)
+				&& !item->elementsAnimating();
+			if (cached) {
+				const auto ratio = style::DevicePixelRatio();
+				const auto size = QSize(item->width(), item->height());
+				cache->paintRow(
+					p,
+					GetLayoutCacheKey(item),
+					size * ratio,
+					ratio,
+					[&](QImage &image) {
+						image.fill(context.bg->c);
+						auto q = Painter(&image);
+						item->paint(
+							q,
+							QRect(QPoint(), size),
+							selection,
+							&localContext);
+					});
+			} else {
+				item->paint(
+					p,
+					clip.translated(-point),
+					selection,
+					&localContext);
+			}
 			p.translate(-point.x(), -point.y());
 		};
 		_mosaic.paint(std::move(paintItem), clip);

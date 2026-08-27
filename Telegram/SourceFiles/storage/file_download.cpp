@@ -25,6 +25,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
+constexpr auto kProgressNotifyInterval = crl::time(50);
+
 class FromMemoryLoader final : public FileLoader {
 public:
 	FromMemoryLoader(
@@ -109,7 +111,12 @@ FileLoader::FileLoader(
 , _fromCloud(fromCloud)
 , _loadSize(loadSize)
 , _fullSize(fullSize)
-, _locationType(locationType) {
+, _locationType(locationType)
+, _progressTimer([=] {
+	if (!_finished) {
+		notifyAboutProgress();
+	}
+}) {
 	Expects(_loadSize <= _fullSize);
 	Expects(!_filename.isEmpty() || (_fullSize <= Storage::kMaxFileInMemory));
 }
@@ -202,6 +209,17 @@ void FileLoader::increaseLoadSize(int64 size, bool autoLoading) {
 }
 
 void FileLoader::notifyAboutProgress() {
+	const auto now = crl::now();
+	const auto elapsed = _lastProgressNotify
+		? (now - _lastProgressNotify)
+		: kProgressNotifyInterval;
+	if (elapsed < kProgressNotifyInterval) {
+		if (!_progressTimer.isActive()) {
+			_progressTimer.callOnce(kProgressNotifyInterval - elapsed);
+		}
+		return;
+	}
+	_lastProgressNotify = now;
 	_updates.fire({});
 }
 

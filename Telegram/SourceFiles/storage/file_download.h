@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/binary_guard.h"
+#include "base/timer.h"
 #include "base/weak_ptr.h"
 
 #include <QtNetwork/QNetworkReply>
@@ -181,7 +182,9 @@ protected:
 	int64 _loadSize = 0;
 	int64 _fullSize = 0;
 	int64 _skippedBytes = 0;
+	crl::time _lastProgressNotify = 0;
 	LocationType _locationType = LocationType();
+	base::Timer _progressTimer;
 
 	base::binary_guard _localLoading;
 	mutable QByteArray _imageFormat;

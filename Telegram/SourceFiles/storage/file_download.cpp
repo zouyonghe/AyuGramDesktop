@@ -36,6 +36,7 @@ namespace {
 		? QByteArray(data.constData(), data.size())
 		: data;
 }
+constexpr auto kProgressNotifyInterval = crl::time(50);
 
 class FromMemoryLoader final : public FileLoader {
 public:

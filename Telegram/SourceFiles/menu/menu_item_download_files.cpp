@@ -52,6 +52,13 @@ struct GroupedDocument {
 
 using GroupedDocuments = std::vector<GroupedDocument>;
 
+struct GroupedPhoto {
+	not_null<PhotoData*> photo;
+	std::vector<FullMsgId> origins;
+};
+
+using GroupedPhotos = std::vector<GroupedPhoto>;
+
 constexpr auto kBatchDownloadsPref = "batch_download_files";
 constexpr auto kMaxBatchDownloads = 100000;
 constexpr auto kMaxBatchDownloadsPayloadSize = 64 * 1024 * 1024;
@@ -96,6 +103,21 @@ GroupedDocuments GroupVideoDocuments(Documents documents) {
 			mediaKeys.emplace(key, int(result.size()));
 		}
 		result.push_back({ document, { origin } });
+	}
+	return result;
+}
+
+GroupedPhotos GroupPhotos(Photos photos) {
+	auto result = GroupedPhotos();
+	result.reserve(photos.size());
+	auto keys = base::flat_map<not_null<PhotoData*>, int>();
+	for (const auto &[photo, origin] : photos) {
+		if (const auto found = keys.find(photo); found != keys.end()) {
+			result[found->second].origins.push_back(origin);
+		} else {
+			keys.emplace(photo, int(result.size()));
+			result.push_back({ photo, { origin } });
+		}
 	}
 	return result;
 }
@@ -498,6 +520,7 @@ Fn<void()> PrepareDownloadAction(
 		Fn<void(not_null<Main::Session*>, FullMsgId)> saved,
 		Fn<void(not_null<Main::Session*>, FullMsgId)> failed) {
 	const auto groupedDocuments = GroupVideoDocuments(std::move(documents));
+	const auto groupedPhotos = GroupPhotos(std::move(photos));
 	const auto shouldShowToast = groupedDocuments.empty();
 	const auto trackBatchDownload = (destination || saved || failed);
 
@@ -565,7 +588,7 @@ Fn<void()> PrepareDownloadAction(
 					return false;
 				};
 				controller->showToast({
-					.text = (photos.size() > 1
+					.text = (groupedPhotos.size() > 1
 							? tr::lng_mediaview_saved_images_to
 							: tr::lng_mediaview_saved_to)(
 						tr::now,
@@ -585,7 +608,7 @@ Fn<void()> PrepareDownloadAction(
 			not_null<PhotoData*> photo;
 			base::weak_ptr<Main::Session> session;
 			std::shared_ptr<Data::PhotoMedia> view;
-			FullMsgId id;
+			std::vector<FullMsgId> origins;
 			QString name;
 			QString path;
 			bool pathOwned = false;
@@ -598,8 +621,13 @@ Fn<void()> PrepareDownloadAction(
 			auto ids = base::flat_map<
 				Main::Session*,
 				std::vector<BatchDownloadIdentity>>();
-			for (const auto &[photo, fullId] : photos) {
-				ids[&photo->session()].push_back({ fullId, std::nullopt });
+			for (const auto &entry : groupedPhotos) {
+				for (const auto &origin : entry.origins) {
+					ids[&entry.photo->session()].push_back({
+						origin,
+						std::nullopt,
+					});
+				}
 			}
 			for (const auto &[owner, list] : ids) {
 				if (!EnsureBatchDownloadCapacity(owner, list)) {
@@ -607,20 +635,26 @@ Fn<void()> PrepareDownloadAction(
 				}
 			}
 		}
-		for (auto i = 0; i != int(photos.size()); ++i) {
-			const auto &[photo, fullId] = photos[i];
+		for (const auto &entry : groupedPhotos) {
+			const auto photo = entry.photo;
+			const auto &origins = entry.origins;
+			const auto fullId = origins.front();
 			const auto owner = &photo->session();
 			if (blocked.contains(owner)) {
-				if (failed) {
-					failed(owner, fullId);
-				}
+				reportFailed(owner, origins);
 				showFailure();
 				continue;
 			}
 			photo->clearFailed(Data::PhotoSize::Large);
 			if (const auto view = photo->createMediaView()) {
 				const auto name = u"photo_"_q
-					+ QString::number(i + 1)
+					+ QString::number(photo->getDC())
+					+ u"_"_q
+					+ (photo->id
+						? QString::number(photo->id)
+						: QString::number(SerializePeerId(fullId.peer))
+							+ u"_"_q
+							+ QString::number(fullId.msg.bare))
 					+ u".jpg"_q;
 				auto destinationPath = ReservedDownloadPath();
 				if (trackBatchDownload) {
@@ -629,17 +663,17 @@ Fn<void()> PrepareDownloadAction(
 						QString(),
 						path);
 					if (destinationPath.path.isEmpty()) {
-						if (failed) {
-							failed(owner, fullId);
-						}
+						reportFailed(owner, origins);
 						showFailure();
 						continue;
 					}
-					pending[owner][fullId] = {
-						destinationPath.path,
-						false,
-						std::nullopt,
-					};
+					for (const auto &origin : origins) {
+						pending[owner][origin] = {
+							destinationPath.path,
+							false,
+							std::nullopt,
+						};
+					}
 				}
 				const auto photoDate = photo->date();
 				const auto item = owner->data().message(fullId);
@@ -647,7 +681,7 @@ Fn<void()> PrepareDownloadAction(
 					.photo = photo,
 					.session = base::make_weak(owner),
 					.view = view,
-					.id = fullId,
+					.origins = origins,
 					.name = name,
 					.path = destinationPath.path,
 					.pathOwned = destinationPath.owned,
@@ -656,9 +690,7 @@ Fn<void()> PrepareDownloadAction(
 						: (item ? item->date() : TimeId(0)),
 				});
 			} else {
-				if (failed) {
-					failed(&photo->session(), fullId);
-				}
+				reportFailed(&photo->session(), origins);
 				showFailure();
 			}
 		}
@@ -677,31 +709,29 @@ Fn<void()> PrepareDownloadAction(
 					if (download.pathOwned) {
 						QFile::remove(download.path);
 					}
-					if (owner && failed) {
-						failed(owner, download.id);
+					if (owner) {
+						reportFailed(owner, download.origins);
 					}
 					showFailure();
 				} else {
-					if (destination) {
-						destination(owner, download.id, download.path);
-					}
+					reportDestinations(owner, download.origins, download.path);
 					accepted.push_back(std::move(download));
 				}
 			}
 			downloads = std::move(accepted);
 		}
 		const auto reportedFailures = std::make_shared<
-			base::flat_set<std::pair<Main::Session*, FullMsgId>>>();
+			base::flat_set<std::pair<Main::Session*, PhotoData*>>>();
 		const auto reportFailure = [=](const PhotoDownload &download) {
 			const auto owner = download.session.get();
 			if (!owner
-				|| !reportedFailures->emplace(owner, download.id).second) {
+				|| !reportedFailures->emplace(
+					owner,
+					download.photo.get()).second) {
 				return;
 			}
 			QFile::remove(download.path);
-			if (failed) {
-				failed(owner, download.id);
-			}
+			reportFailed(owner, download.origins);
 			showFailure();
 		};
 		const auto endedSessions = std::make_shared<
@@ -721,7 +751,7 @@ Fn<void()> PrepareDownloadAction(
 
 		const auto saveToFiles = [=] {
 			auto lastSavedPath = QString();
-			auto allSaved = (downloads.size() == photos.size());
+			auto allSaved = (downloads.size() == groupedPhotos.size());
 			auto completed = base::flat_map<Main::Session*, BatchDownloads>();
 			auto savedResults = std::vector<
 				std::pair<not_null<Main::Session*>, FullMsgId>>();
@@ -740,7 +770,9 @@ Fn<void()> PrepareDownloadAction(
 					if (download.photo->failed(Data::PhotoSize::Large)) {
 						reportFailure(download);
 					} else {
-						failedResults.emplace_back(owner, download.id);
+						for (const auto &origin : download.origins) {
+							failedResults.emplace_back(owner, origin);
+						}
 					}
 					QFile::remove(download.path);
 					allSaved = false;
@@ -754,7 +786,9 @@ Fn<void()> PrepareDownloadAction(
 						path);
 					destinationPath = reserved.path;
 					if (destinationPath.isEmpty()) {
-						failedResults.emplace_back(owner, download.id);
+						for (const auto &origin : download.origins) {
+							failedResults.emplace_back(owner, origin);
+						}
 						allSaved = false;
 						continue;
 					}
@@ -774,14 +808,18 @@ Fn<void()> PrepareDownloadAction(
 					}
 				}
 				if (savedToFile && trackBatchDownload) {
-					completed[owner][download.id] = {
-						destinationPath,
-						true,
-						std::nullopt,
-					};
-					savedResults.emplace_back(owner, download.id);
+					for (const auto &origin : download.origins) {
+						completed[owner][origin] = {
+							destinationPath,
+							true,
+							std::nullopt,
+						};
+						savedResults.emplace_back(owner, origin);
+					}
 				} else if (!savedToFile) {
-					failedResults.emplace_back(owner, download.id);
+					for (const auto &origin : download.origins) {
+						failedResults.emplace_back(owner, origin);
+					}
 				}
 				if (savedToFile) {
 					lastSavedPath = destinationPath;
@@ -830,14 +868,7 @@ Fn<void()> PrepareDownloadAction(
 					continue;
 				}
 				owner->data().photoLoadProgress(
-				) | rpl::on_next_done([=](not_null<PhotoData*> changed) mutable {
-					if (changed->failed(Data::PhotoSize::Large)) {
-						for (const auto &download : downloads) {
-							if (download.photo == changed) {
-								reportFailure(download);
-							}
-						}
-					}
+				) | rpl::on_next_done([=](not_null<PhotoData*>) {
 					finish();
 				}, [=]() mutable {
 					endedSessions->emplace(owner);
@@ -845,10 +876,9 @@ Fn<void()> PrepareDownloadAction(
 				}, *lifetime);
 			}
 			for (const auto &download : downloads) {
-				download.view->wanted(Data::PhotoSize::Large, download.id);
-				if (download.photo->failed(Data::PhotoSize::Large)) {
-					reportFailure(download);
-				}
+				download.view->wanted(
+					Data::PhotoSize::Large,
+					download.origins.front());
 			}
 			finish();
 		}

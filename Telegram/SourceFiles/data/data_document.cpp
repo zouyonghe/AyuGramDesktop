@@ -1229,8 +1229,21 @@ void DocumentData::save(
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
 	Test::NotifyDocumentSave(this, toFile, autoLoading);
-	if (const auto media = activeMediaView(); media && media->loaded(true)) {
-		const auto &l = location(true);
+	const auto media = activeMediaView();
+	const auto complete = media
+		&& (size > 0)
+		&& (media->bytes().size() == size
+			|| (media->bytes().isEmpty() && ([&] {
+				const auto path = filepath(true);
+				const auto info = QFileInfo(path);
+				return info.isFile() && info.size() == size;
+			})()));
+	if (media
+		&& media->loaded(true)
+		&& status != FileDownloadFailed
+		&& !cancelled()
+		&& complete) {
+		auto &l = location(true);
 		if (!toFile.isEmpty()) {
 			if (!media->bytes().isEmpty()) {
 				QFile f(toFile);

@@ -112,6 +112,7 @@ jobs:
     uses: ./.github/workflows/linux-debug.yml
     with:
       ref: ${{ needs.prepare.outputs.commit }}
+      configuration: Release
 
   windows:
     name: Windows x64
@@ -119,6 +120,7 @@ jobs:
     uses: ./.github/workflows/windows-debug.yml
     with:
       ref: ${{ needs.prepare.outputs.commit }}
+      configuration: Release
 
   macos:
     name: macOS arm64
@@ -126,6 +128,7 @@ jobs:
     uses: ./.github/workflows/macos-debug.yml
     with:
       ref: ${{ needs.prepare.outputs.commit }}
+      configuration: Release
 
   release:
     name: Create GitHub Release
@@ -149,11 +152,11 @@ jobs:
         run: |
           mkdir release-assets
           tar -czf "release-assets/AyuGram-$TAG-linux-x64.tar.gz" \
-            -C artifacts/AyuGram-Linux-Debug .
-          (cd artifacts/AyuGram-Windows-x64-Debug && \
+            -C artifacts/AyuGram-Linux-Release .
+          (cd artifacts/AyuGram-Windows-x64-Release && \
             zip -r "$GITHUB_WORKSPACE/release-assets/AyuGram-$TAG-windows-x64.zip" .)
           cp \
-            artifacts/AyuGram-macOS-arm64-Debug/AyuGram-macOS-arm64-Debug.tar.gz \
+            artifacts/AyuGram-macOS-arm64-Release/AyuGram-macOS-arm64-Release.tar.gz \
             "release-assets/AyuGram-$TAG-macos-arm64.tar.gz"
           sha256sum release-assets/* > release-assets/SHA256SUMS.txt
 

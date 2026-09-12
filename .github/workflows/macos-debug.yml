@@ -6,11 +6,20 @@ on:
       ref:
         required: false
         type: string
+      configuration:
+        required: false
+        default: Debug
+        type: string
   workflow_dispatch:
     inputs:
       ref:
         description: Commit SHA, branch, or tag to build
         required: false
+        type: string
+      configuration:
+        description: CMake build configuration
+        required: false
+        default: Debug
         type: string
 
 jobs:
@@ -22,6 +31,7 @@ jobs:
     env:
       PREPARE_PATH: Telegram/build/prepare/prepare.py
       HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+      BUILD_CONFIG: ${{ inputs.configuration || 'Debug' }}
 
     steps:
       - name: Set repository name
@@ -63,28 +73,28 @@ jobs:
         run: |
           cd "$REPO_NAME/Telegram"
           ./configure.sh \
-            -D CMAKE_CONFIGURATION_TYPES=Debug \
+            -D CMAKE_CONFIGURATION_TYPES="$BUILD_CONFIG" \
             -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -D TDESKTOP_API_TEST=ON \
             -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
             -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
-          cmake --build ../out --config Debug --parallel
+          cmake --build ../out --config "$BUILD_CONFIG" --parallel
 
       - name: Check output
         run: |
-          test -d "$REPO_NAME/out/Debug/AyuGram.app"
-          test -f "$REPO_NAME/out/Debug/Updater"
-          du -sh "$REPO_NAME/out/Debug/AyuGram.app" "$REPO_NAME/out/Debug/Updater"
+          test -d "$REPO_NAME/out/$BUILD_CONFIG/AyuGram.app"
+          test -f "$REPO_NAME/out/$BUILD_CONFIG/Updater"
+          du -sh "$REPO_NAME/out/$BUILD_CONFIG/AyuGram.app" "$REPO_NAME/out/$BUILD_CONFIG/Updater"
 
       - name: Prepare artifact
         run: |
-          cd "$REPO_NAME/out/Debug"
-          tar -czf AyuGram-macOS-arm64-Debug.tar.gz AyuGram.app Updater
+          cd "$REPO_NAME/out/$BUILD_CONFIG"
+          tar -czf "AyuGram-macOS-arm64-$BUILD_CONFIG.tar.gz" AyuGram.app Updater
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: AyuGram-macOS-arm64-Debug
-          path: ${{ env.REPO_NAME }}/out/Debug/AyuGram-macOS-arm64-Debug.tar.gz
+          name: AyuGram-macOS-arm64-${{ inputs.configuration || 'Debug' }}
+          path: ${{ env.REPO_NAME }}/out/${{ inputs.configuration || 'Debug' }}/AyuGram-macOS-arm64-${{ inputs.configuration || 'Debug' }}.tar.gz
           retention-days: 7

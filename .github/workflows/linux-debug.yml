@@ -6,11 +6,20 @@ on:
       ref:
         required: false
         type: string
+      configuration:
+        required: false
+        default: Debug
+        type: string
   workflow_dispatch:
     inputs:
       ref:
         description: Commit SHA, branch, or tag to build
         required: false
+        type: string
+      configuration:
+        description: CMake build configuration
+        required: false
+        default: Debug
         type: string
 
 jobs:
@@ -21,6 +30,7 @@ jobs:
 
     env:
       IMAGE_TAG: tdesktop:centos_env
+      BUILD_CONFIG: ${{ inputs.configuration || 'Debug' }}
 
     steps:
       - name: Clone
@@ -99,13 +109,11 @@ jobs:
             -u "$(id -u)" \
             -v "$PWD:/usr/src/tdesktop" \
             -v "${{ env.CCACHE_DIR }}:/var/cache/ccache" \
-            -e CONFIG=Debug \
+            -e CONFIG="$BUILD_CONFIG" \
             -e CCACHE_SLOPPINESS=pch_defines,time_macros \
             "$IMAGE_TAG" \
             env -u CCACHE_DISABLE /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-            -D CMAKE_CONFIGURATION_TYPES=Debug \
-            -D CMAKE_C_FLAGS_DEBUG="-O0 -fpch-preprocess" \
-            -D CMAKE_CXX_FLAGS_DEBUG="-O0 -fpch-preprocess" \
+            -D CMAKE_CONFIGURATION_TYPES="$BUILD_CONFIG" \
             -D CMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -D TDESKTOP_API_TEST=ON \
             -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF \
@@ -120,19 +128,19 @@ jobs:
 
       - name: Check output
         run: |
-          test -f out/Debug/AyuGram
-          test -f out/Debug/Updater
-          file out/Debug/AyuGram
-          stat -c '%n: %s bytes' out/Debug/AyuGram out/Debug/Updater
+          test -f "out/$BUILD_CONFIG/AyuGram"
+          test -f "out/$BUILD_CONFIG/Updater"
+          file "out/$BUILD_CONFIG/AyuGram"
+          stat -c '%n: %s bytes' "out/$BUILD_CONFIG/AyuGram" "out/$BUILD_CONFIG/Updater"
 
       - name: Prepare artifact
         run: |
-          mkdir -p out/Debug/artifact
-          mv out/Debug/AyuGram out/Debug/Updater out/Debug/artifact/
+          mkdir -p "out/$BUILD_CONFIG/artifact"
+          mv "out/$BUILD_CONFIG/AyuGram" "out/$BUILD_CONFIG/Updater" "out/$BUILD_CONFIG/artifact/"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: AyuGram-Linux-Debug
-          path: out/Debug/artifact/
+          name: AyuGram-Linux-${{ inputs.configuration || 'Debug' }}
+          path: out/${{ inputs.configuration || 'Debug' }}/artifact/
           retention-days: 7

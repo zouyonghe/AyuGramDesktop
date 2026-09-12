@@ -6,11 +6,20 @@ on:
       ref:
         required: false
         type: string
+      configuration:
+        required: false
+        default: Debug
+        type: string
   workflow_dispatch:
     inputs:
       ref:
         description: Commit SHA, branch, or tag to build
         required: false
+        type: string
+      configuration:
+        description: CMake build configuration
+        required: false
+        default: Debug
         type: string
 
 jobs:
@@ -21,6 +30,7 @@ jobs:
 
     env:
       PREPARE_PATH: Telegram/build/prepare/prepare.py
+      BUILD_CONFIG: ${{ inputs.configuration || 'Debug' }}
 
     defaults:
       run:
@@ -126,29 +136,29 @@ jobs:
           call configure.bat ^
           x64 ^
           -D TDESKTOP_API_TEST=ON ^
-          -D CMAKE_CONFIGURATION_TYPES=Debug ^
+          -D CMAKE_CONFIGURATION_TYPES=%BUILD_CONFIG% ^
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
-          cmake --build ..\out --config Debug --parallel 1
+          cmake --build ..\out --config %BUILD_CONFIG% --parallel 1
 
       - name: Check output
         run: |
-          if not exist %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe exit /b 1
-          if not exist %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe exit /b 1
-          dir %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe
-          dir %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe
+          if not exist %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\AyuGram.exe exit /b 1
+          if not exist %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\Updater.exe exit /b 1
+          dir %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\AyuGram.exe
+          dir %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\Updater.exe
 
       - name: Prepare artifact
         run: |
           mkdir artifact
-          move %TBUILD%\%REPO_NAME%\out\Debug\AyuGram.exe artifact\
-          move %TBUILD%\%REPO_NAME%\out\Debug\Updater.exe artifact\
+          move %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\AyuGram.exe artifact\
+          move %TBUILD%\%REPO_NAME%\out\%BUILD_CONFIG%\Updater.exe artifact\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: AyuGram-Windows-x64-Debug
+          name: AyuGram-Windows-x64-${{ inputs.configuration || 'Debug' }}
           path: artifact\
           retention-days: 7

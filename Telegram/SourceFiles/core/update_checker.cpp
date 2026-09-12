@@ -2375,11 +2375,6 @@ void UpdateApplication() {
 #elif defined OS_MAC_STORE // OS_WIN_STORE
 			return "https://itunes.apple.com/ae/app/telegram-desktop/id946399090";
 #else // OS_WIN_STORE || OS_MAC_STORE
-			if (KSandbox::isFlatpak()) {
-				return "https://flathub.org/apps/details/org.telegram.desktop";
-			} else if (KSandbox::isSnap()) {
-				return "https://snapcraft.io/telegram-desktop";
-			}
 			return "https://t.me/AyuGramReleases";
 #endif // OS_WIN_STORE || OS_MAC_STORE
 		}();

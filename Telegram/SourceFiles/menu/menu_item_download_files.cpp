@@ -658,7 +658,7 @@ Fn<void()> PrepareDownloadAction(
 							+ u"_"_q
 							+ QString::number(fullId.msg.bare))
 					+ u".jpg"_q;
-				auto destinationPath = ReservedDownloadPath();
+				auto destinationPath = ReservedDownloadPath{};
 				if (trackBatchDownload) {
 					destinationPath = ReserveDownloadPath(
 						name,
@@ -1323,7 +1323,7 @@ bool DownloadSelectedFiles(
 	auto documents = Documents();
 	auto photos = Photos();
 	for (const auto &item : items) {
-		if (!Added(item, documents, photos)) {
+		if (!Collected(item, documents, photos)) {
 			return false;
 		}
 	}

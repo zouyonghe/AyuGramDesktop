@@ -91,7 +91,7 @@ public:
 	[[nodiscard]] virtual uint64 objId() const {
 		return 0;
 	}
-	[[nodiscard]] QImage imageData(int progressiveSizeLimit = 0) const;
+	[[nodiscard]] QImage imageData() const;
 	[[nodiscard]] QString fileName() const {
 		return _filename;
 	}
@@ -141,7 +141,7 @@ protected:
 		Loaded,
 	};
 
-	void readImage(int progressiveSizeLimit) const;
+	void readImage() const;
 
 	bool checkForOpen();
 	bool tryLoadLocal();

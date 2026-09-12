@@ -70,6 +70,12 @@ public:
 		return _parent;
 	}
 
+	[[nodiscard]] virtual DocumentData *getDocument() const {
+		return nullptr;
+	}
+
+	[[nodiscard]] virtual bool selectionConsumesClick(QPoint point) const;
+
 	void clickHandlerActiveChanged(const ClickHandlerPtr &action, bool active) override;
 	void clickHandlerPressedChanged(const ClickHandlerPtr &action, bool pressed) override;
 
@@ -192,7 +198,7 @@ private:
 
 };
 
-struct Info : RuntimeComponent<Info, LayoutItemBase> {
+struct Info : RuntimeComponent<Info, AbstractLayoutItem> {
 	int top = 0;
 };
 
@@ -316,6 +322,7 @@ private:
 	QImage _thumb;
 	bool _thumbGood = false;
 	bool _sensitiveSpoiler = false;
+	bool _inlineOverCap = false;
 
 };
 
@@ -393,6 +400,10 @@ public:
 		QPoint point,
 		StateRequest request) const override;
 
+	[[nodiscard]] DocumentData *getDocument() const override {
+		return _data;
+	}
+
 	void clearHeavyPart() override;
 
 protected:
@@ -449,6 +460,11 @@ public:
 	TextState getState(
 		QPoint point,
 		StateRequest request) const override;
+	[[nodiscard]] bool selectionConsumesClick(QPoint point) const override;
+
+	[[nodiscard]] DocumentData *getDocument() const override {
+		return _data;
+	}
 
 	void clearHeavyPart() override;
 

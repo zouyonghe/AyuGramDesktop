@@ -25,7 +25,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
-constexpr auto kProgressNotifyInterval = crl::time(50);
+[[nodiscard]] QByteArray OwningBytes(const QByteArray &data) {
+	// QByteArray::fromRawData() makes an array whose bytes live outside its
+	// own refcounted block, and every copy of it keeps pointing there, so it
+	// dangles once those bytes are freed. Qt marks such an array by leaving
+	// its allocated capacity at zero, while an array that owns its block
+	// always reports a capacity of at least size(), so only a borrowing one
+	// can report capacity() < size(). Measured on Qt 5.15.19 and 6.11.1.
+	return (data.capacity() < data.size())
+		? QByteArray(data.constData(), data.size())
+		: data;
+}
 
 class FromMemoryLoader final : public FileLoader {
 public:
@@ -130,7 +140,7 @@ Main::Session &FileLoader::session() const {
 }
 
 void FileLoader::finishWithBytes(const QByteArray &data) {
-	_data = data;
+	_data = OwningBytes(data);
 	_localStatus = LocalStatus::Loaded;
 	if (!_filename.isEmpty() && _toCache == LoadToCacheAsWell) {
 		if (!_fileIsOpen) _fileIsOpen = _file.open(QIODevice::WriteOnly);
@@ -157,16 +167,16 @@ void FileLoader::finishWithBytes(const QByteArray &data) {
 	session->notifyDownloaderTaskFinished();
 }
 
-QImage FileLoader::imageData(int progressiveSizeLimit) const {
+QImage FileLoader::imageData() const {
 	if (_imageData.isNull() && _locationType == UnknownFileLocation) {
-		readImage(progressiveSizeLimit);
+		readImage();
 	}
 	return _imageData;
 }
 
-void FileLoader::readImage(int progressiveSizeLimit) const {
-	const auto buffer = progressiveSizeLimit
-		? QByteArray::fromRawData(_data.data(), progressiveSizeLimit)
+void FileLoader::readImage() const {
+	const auto buffer = _loadSize
+		? QByteArray::fromRawData(_data.data(), _loadSize)
 		: _data;
 	auto read = Images::Read({ .content = buffer });
 	if (!read.image.isNull()) {

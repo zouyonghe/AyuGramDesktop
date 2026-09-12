@@ -124,7 +124,12 @@ jobs:
           restore-keys: ${{ runner.os }}-x64-qt-
 
       - name: Prepare libraries
-        run: '%TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent'
+        run: |
+          if /I "%BUILD_CONFIG%"=="Release" (
+            call %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent
+          ) else (
+            call %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
+          )
 
       - name: Free disk space
         shell: bash

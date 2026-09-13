@@ -123,6 +123,33 @@ jobs:
           key: ${{ runner.os }}-x64-qt-${{ env.CACHE_KEY }}
           restore-keys: ${{ runner.os }}-x64-qt-
 
+      - name: Install Visual Studio ATL component
+        shell: pwsh
+        run: |
+          $installer = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+          $vswhere = Join-Path $installer 'vswhere.exe'
+          $setup = Join-Path $installer 'setup.exe'
+          $toolsComponent = 'Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64'
+          $atlComponent = 'Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL'
+          $path = @(& $vswhere -latest -products '*' -requires $toolsComponent -property installationPath)[0]
+          if (-not $path) {
+            throw "No Visual Studio instance provides $toolsComponent."
+          }
+          $toolset = Get-ChildItem (Join-Path $path 'VC\Tools\MSVC') -Directory `
+            | Where-Object { $_.Name -like '14.44.*' } `
+            | Sort-Object Name -Descending `
+            | Select-Object -First 1
+          $header = Join-Path $toolset.FullName 'atlmfc\include\atlbase.h'
+          if (-not (Test-Path $header)) {
+            $process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+              'modify', '--installPath', "`"$path`"", '--add', $atlComponent,
+              '--quiet', '--norestart', '--nocache'
+            )
+            if ($process.ExitCode -notin @(0, 3010) -or -not (Test-Path $header)) {
+              throw "Failed to install $atlComponent."
+            }
+          }
+
       - name: Prepare libraries
         run: |
           if /I "%BUILD_CONFIG%"=="Release" (

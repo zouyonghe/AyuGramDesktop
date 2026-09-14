@@ -276,8 +276,6 @@ set(ayugram_files
         ayu/data/ayu_database.cpp
         ayu/data/ayu_database.h
 
-        info/profile/info_profile_music_button.cpp
-        info/profile/info_profile_music_button.h
 )
 
 if (NOT DESKTOP_APP_DISABLE_SWIFT6)

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_msg_id.h"
 #include "ui/widgets/buttons.h"
 #include "ui/text/format_song_name.h"
 #include "ui/text/text.h"

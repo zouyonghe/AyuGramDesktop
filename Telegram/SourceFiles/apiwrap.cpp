@@ -5366,6 +5366,7 @@ void ApiWrap::sendMediaWithRandomId(
 		}
 		return;
 	}
+	applyGhostScheduling(_session, options);
 
 	const auto history = item->history();
 	const auto replyTo = item->replyTo();

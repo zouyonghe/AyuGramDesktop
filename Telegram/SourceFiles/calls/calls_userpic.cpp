@@ -199,7 +199,9 @@ void Userpic::createCache(Image *image) {
 			{
 				.outer = { size, size },
 			}).toImage();
-		result = AyuUserpic::Round(std::move(result));
+		result = Images::Round(
+			std::move(result),
+			ImageRoundRadius::AyuUserpic);
 		_userPhoto = Images::PixmapFast(std::move(result));
 		_userPhoto.setDevicePixelRatio(style::DevicePixelRatio());
 	} else {

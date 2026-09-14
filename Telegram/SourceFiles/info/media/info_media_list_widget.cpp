@@ -702,7 +702,7 @@ bool ListWidget::canDownloadItem(
 		&& ((data->state == BatchDownloadState::Waiting)
 			|| (data->state == BatchDownloadState::Downloading));
 	return !downloading
-		&& !item->forbidsForward()
+		&& !item->forbidsSaving()
 		&& media
 		&& (media->photo() || media->document())
 		&& ((_provider->type() == Type::Photo)

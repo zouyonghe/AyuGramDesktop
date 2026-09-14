@@ -231,7 +231,7 @@ void ViewButton::draw(
 		Ui::Text::ValidateQuotePaintCache(*cache, st::historyPagePreview);
 		Ui::Text::FillQuotePaint(p, r, *cache, st::historyPagePreview);
 		if (_inner->ripple) {
-			_inner->ripple->paint(p, r.left(), r.top(), r.width(), &cache->bg);
+			_inner->ripple->paint(p, r.left(), r.top(), r.width(), &cache->bg2);
 			if (_inner->ripple->empty()) {
 				_inner->ripple = nullptr;
 			}

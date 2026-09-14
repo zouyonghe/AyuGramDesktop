@@ -101,9 +101,7 @@ Media::Clip::FrameRequest VideoUserpic::request(int size) const {
 		.frame = { size, size },
 		.outer = { size, size },
 		.factor = style::DevicePixelRatio(),
-		.radius = AyuUserpic::IsCircle()
-			? ImageRoundRadius::Ellipse
-			: ImageRoundRadius::Small,
+		.radius = ImageRoundRadius::AyuUserpic,
 	};
 }
 

@@ -175,7 +175,9 @@ void ValidateUserpicCache(
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
 		if (ayuOverride) {
-			view.cached = AyuUserpic::Round(std::move(view.cached));
+			view.cached = Images::Round(
+				std::move(view.cached),
+				ImageRoundRadius::AyuUserpic);
 		} else if (shape == PeerUserpicShape::Monoforum) {
 			view.cached = Ui::ApplyMonoforumShape(std::move(view.cached));
 		} else if (shape == PeerUserpicShape::Forum) {

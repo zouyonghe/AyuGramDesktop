@@ -37,20 +37,6 @@ int ComputeRadius(int pixelSize) {
 	return int(double(corners) / AyuUiSettings::kMaxAvatarCorners * pixelSize / 2.0);
 }
 
-QImage Round(QImage &&image) {
-	const auto minSide = std::min(image.width(), image.height());
-	const auto radius = ComputeRadius(minSide);
-	if (!radius) {
-		return std::move(image);
-	} else if (radius * 2 >= minSide) {
-		return Images::Circle(std::move(image));
-	}
-	const auto masks = Images::CornersMask(radius);
-	return Images::Round(
-		std::move(image),
-		Images::CornersMaskRef(masks));
-}
-
 double ComputeRadiusF(double size) {
 	const auto corners = AyuUiSettings::getAvatarCorners();
 	if (corners >= AyuUiSettings::kMaxAvatarCorners) return size / 2.0;

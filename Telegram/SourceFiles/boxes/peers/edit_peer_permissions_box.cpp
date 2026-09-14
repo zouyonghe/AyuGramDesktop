@@ -554,6 +554,7 @@ not_null<Ui::RpWidget*> AddInnerToggle(
 	) | rpl::on_next([=] {
 		reposition();
 	}, button->lifetime());
+	wrap->ease = anim::easeOutCubic;
 	wrap->toggledValue(
 	) | rpl::skip(1) | rpl::on_next([=](bool toggled) {
 		state->animation.start(
@@ -563,7 +564,6 @@ not_null<Ui::RpWidget*> AddInnerToggle(
 			st::slideWrapDuration,
 			anim::easeOutCubic);
 	}, button->lifetime());
-	wrap->ease = anim::easeOutCubic;
 
 	const auto handleLocked = [=] {
 		if (locked.has_value()) {

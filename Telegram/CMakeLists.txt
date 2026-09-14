@@ -118,9 +118,24 @@ PRIVATE
     ayugram::lib_icu
 )
 
+if (WIN32)
+    set(ayugram_streamer_mode_platform_files
+        ayu/features/streamer_mode/platform/win/streamer_mode_win.cpp
+        ayu/features/streamer_mode/platform/win/streamer_mode_win.h
+    )
+elseif (APPLE)
+    set(ayugram_streamer_mode_platform_files
+        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.h
+        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.mm
+    )
+else()
+    set(ayugram_streamer_mode_platform_files
+        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.cpp
+        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.h
+    )
+endif()
+
 set(ayugram_files
-        ayu/ayu_ui_settings.cpp
-        ayu/ayu_ui_settings.h
         ayu/ayu_worker.cpp
         ayu/ayu_worker.h
         ayu/ayu_url_handlers.cpp
@@ -223,12 +238,7 @@ set(ayugram_files
         ayu/libs/sqlite/sqlite3.c
         ayu/libs/sqlite/sqlite3.h
         ayu/libs/sqlite/sqlite_orm.h
-        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.cpp
-        ayu/features/streamer_mode/platform/linux/streamer_mode_linux.h
-        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.mm
-        ayu/features/streamer_mode/platform/mac/streamer_mode_mac.h
-        ayu/features/streamer_mode/platform/win/streamer_mode_win.cpp
-        ayu/features/streamer_mode/platform/win/streamer_mode_win.h
+        ${ayugram_streamer_mode_platform_files}
         ayu/features/streamer_mode/platform/platform_streamer_mode.h
         ayu/features/streamer_mode/streamer_mode.cpp
         ayu/features/streamer_mode/streamer_mode.h

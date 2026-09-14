@@ -327,6 +327,7 @@ not_null<Ui::RpWidget*> AddInnerToggle(not_null<Ui::VerticalLayout*> container,
 								(s.height() - arrow->height()) / 2);
 						},
 						button->lifetime());
+	wrap->ease = anim::easeOutCubic;
 	wrap->toggledValue(
 	) | rpl::skip(1) | on_next([=](bool toggled)
 									   {
@@ -341,7 +342,6 @@ not_null<Ui::RpWidget*> AddInnerToggle(not_null<Ui::VerticalLayout*> container,
 											   anim::easeOutCubic);
 									   },
 									   button->lifetime());
-	wrap->ease = anim::easeOutCubic;
 
 	button->clicks(
 	) | on_next([=]

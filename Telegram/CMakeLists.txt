@@ -29,6 +29,9 @@ add_subdirectory(lib_icu)
 if (NOT MSVC)
     target_compile_options(icu_regex_minimal PRIVATE -Wno-deprecated-declarations)
 endif()
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(icu_regex_minimal PRIVATE -Wno-stringop-overflow)
+endif()
 if (APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(icu_regex_minimal PRIVATE -Wno-shorten-64-to-32)
 endif()
@@ -116,6 +119,8 @@ PRIVATE
 )
 
 set(ayugram_files
+        ayu/ayu_ui_settings.cpp
+        ayu/ayu_ui_settings.h
         ayu/ayu_worker.cpp
         ayu/ayu_worker.h
         ayu/ayu_url_handlers.cpp

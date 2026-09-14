@@ -1071,7 +1071,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (_ripple) {
-		_ripple->paint(p, outer.x(), outer.y(), width(), &cache->bg2);
+		_ripple->paint(p, outer.x(), outer.y(), width(), &cache->bg);
 		if (_ripple->empty()) {
 			_ripple = nullptr;
 		}

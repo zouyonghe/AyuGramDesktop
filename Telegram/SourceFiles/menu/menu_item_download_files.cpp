@@ -1323,11 +1323,11 @@ bool DownloadSelectedFiles(
 	auto documents = Documents();
 	auto photos = Photos();
 	for (const auto &item : items) {
-		if (!Added(item, documents, photos)) {
+		if (!Collected(item, documents, photos)) {
 			return false;
 		}
 	}
-	if (items.empty()) {
+	if (documents.empty() && photos.empty()) {
 		return false;
 	}
 	if (forceDefaultPath) {

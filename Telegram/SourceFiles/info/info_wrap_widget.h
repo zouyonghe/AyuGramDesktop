@@ -191,6 +191,7 @@ private:
 	void showNewContent(
 		not_null<ContentMemento*> memento,
 		const Window::SectionShow &params);
+	void subscribeToThreadDestroyed();
 	bool returnToFirstStackFrame(
 		not_null<ContentMemento*> memento,
 		const Window::SectionShow &params);
@@ -222,8 +223,9 @@ private:
 	bool requireTopBarSearch() const;
 
 	void addTopBarMenuButton();
+	[[nodiscard]] bool topBarMenuHasActions() const;
 	void addProfileCallsButton();
-	void showTopBarMenu(bool check);
+	void showTopBarMenu();
 
 	const bool _isSeparatedWindow = false;
 
@@ -249,6 +251,7 @@ private:
 
 	std::vector<StackItem> _historyStack;
 	rpl::event_stream<> _removeRequests;
+	rpl::lifetime _threadDestroyedLifetime;
 	bool _shortcutsSetup = false;
 
 	rpl::event_stream<rpl::producer<int>> _desiredHeights;

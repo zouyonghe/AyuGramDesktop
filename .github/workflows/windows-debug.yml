@@ -120,6 +120,18 @@ jobs:
         shell: bash
         run: find "$LibrariesPath" '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -path '*/src/wallet_engine/*' ')' -type f ')' -o -empty ')' -delete
 
+      - name: Remove Rust intermediate archives
+        shell: pwsh
+        run: |
+          @(
+            "$env:LibrariesPath\tdesktop_rust\target",
+            "$env:LibrariesPath\wallet-engine\target",
+            "$env:LibrariesPath\wallet-engine\bindgen\cpp\bindgen\target"
+          ) | Where-Object { Test-Path $_ } | ForEach-Object {
+            Remove-Item -LiteralPath $_ -Recurse -Force
+          }
+          Get-PSDrive C
+
       - name: Build AyuGram Desktop
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram

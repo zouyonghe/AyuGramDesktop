@@ -731,7 +731,7 @@ void Histories::sendReadRequests() {
 			state.willReadWhen = 0;
 			histories.push_back(history);
 		}
-		for (const auto history : histories) {
+		for (const auto &history : histories) {
 			checkEmptyState(history);
 		}
 		return;

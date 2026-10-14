@@ -202,18 +202,6 @@ using ForwardPanel = Controls::ForwardPanel;
 		(button)->hide(); \
 	}
 
-[[nodiscard]] QString FirstEmoji(const QString &s) {
-	const auto begin = s.data();
-	const auto end = begin + s.size();
-	for (auto ch = begin; ch != end; ch++) {
-		auto length = 0;
-		if (const auto e = Ui::Emoji::Find(ch, end, &length)) {
-			return e->text();
-		}
-	}
-	return QString();
-}
-
 } // namespace
 
 namespace Controls {

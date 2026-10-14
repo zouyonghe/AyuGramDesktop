@@ -205,7 +205,7 @@ void TakeFreshMenu(
 		&& (parent == result.receiverWidget.data());
 	const auto &actions = menu->actions();
 	result.actions = int(actions.size());
-	for (const auto action : actions) {
+	for (const auto &action : actions) {
 		if (action->isSeparator()) {
 			++result.separators;
 		} else {
@@ -980,7 +980,7 @@ MenuTrigger TriggerContextMenuAction(
 	}
 	auto texts = QStringList();
 	auto matches = std::vector<QAction*>();
-	for (const auto action : menu->actions()) {
+	for (const auto &action : menu->actions()) {
 		if (action->isSeparator()) {
 			continue;
 		}
